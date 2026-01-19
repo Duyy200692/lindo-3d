@@ -241,8 +241,11 @@ interface ModelErrorBoundaryState {
 }
 
 // Error Boundary specifically for the Canvas part to catch GLTF loading errors
-class ModelErrorBoundary extends Component<ModelErrorBoundaryProps, ModelErrorBoundaryState> {
-  state: ModelErrorBoundaryState = { hasError: false };
+class ModelErrorBoundary extends React.Component<ModelErrorBoundaryProps, ModelErrorBoundaryState> {
+  constructor(props: ModelErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false };
+  }
 
   static getDerivedStateFromError(error: any): ModelErrorBoundaryState {
     return { hasError: true };
