@@ -7,8 +7,9 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@300;400;600;700&display=swap" rel="stylesheet">
     <script>
-      // Shim for process.env to prevent ReferenceErrors in the browser
+      // Shim cho process.env để tránh lỗi ReferenceError trong trình duyệt
       window.process = window.process || { env: {} };
+      if (!window.process.env) window.process.env = {};
     </script>
     <style>
       html, body, #root {
@@ -70,6 +71,14 @@
 </script>
 </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div style="display:flex; flex-direction:column; justify-content:center; align-items:center; height:100vh; font-family:sans-serif; background:#f0f9ff;">
+        <h2 style="color:#6366f1; margin-bottom:10px;">Đang tải KiddoWorld...</h2>
+        <div style="width:40px; height:40px; border:4px solid #e2e8f0; border-top-color:#6366f1; border-radius:50%; animate: spin 1s linear infinite;"></div>
+        <style>
+          @keyframes spin { to { transform: rotate(360deg); } }
+        </style>
+      </div>
+    </div>
   </body>
 </html>

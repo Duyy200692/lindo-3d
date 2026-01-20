@@ -11,17 +11,24 @@ const firebaseConfig = {
   appId: "1:448393169111:web:dcaf613efb242f1e70c892"
 };
 
-// Singleton initialization pattern
-const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+// Khởi tạo Firebase App theo mô hình Singleton an toàn
+let app;
+try {
+  app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+} catch (e) {
+  console.error("Firebase App initialization failed", e);
+}
 
 let db: any = null;
 let storage: any = null;
 
-try {
-  db = getFirestore(app);
-  storage = getStorage(app);
-} catch (error) {
-  console.error("Firebase services initialization failed:", error);
+if (app) {
+  try {
+    db = getFirestore(app);
+    storage = getStorage(app);
+  } catch (error) {
+    console.error("Firebase services initialization failed:", error);
+  }
 }
 
 export { db, storage, app };
