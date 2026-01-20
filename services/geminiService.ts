@@ -1,49 +1,50 @@
+
 import { GoogleGenAI, Type } from "@google/genai";
 import { FunFactData } from "../types";
 
 export const fetchFunFact = async (itemName: string): Promise<FunFactData> => {
-  const apiKey = process.env.API_KEY;
-  
-  if (!apiKey) {
-    console.error("API_KEY is not defined in environment variables.");
+  // Sử dụng trực tiếp process.env.API_KEY theo quy định
+  if (!process.env.API_KEY) {
+    console.error("API_KEY chưa được thiết lập.");
     return {
       name: itemName,
-      description: "Ứng dụng chưa được cấu hình chìa khóa AI. Bé hãy nhờ ba mẹ kiểm tra nhé!",
-      funFact: "Kiến thức là sức mạnh!",
+      description: "Ứng dụng chưa có chìa khóa AI, bé hãy nhờ ba mẹ giúp nhé!",
+      funFact: "Kiến thức là món quà tuyệt vời nhất!",
       soundText: "..."
     };
   }
 
   try {
-    const ai = new GoogleGenAI({ apiKey });
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
-      contents: `Explain what a "${itemName}" is for a 5-year-old child in Vietnamese. Be creative, funny, and educational.`,
+      contents: `Hãy giải thích "${itemName}" là gì cho một bé 5 tuổi bằng tiếng Việt. Nội dung phải sáng tạo, vui nhộn và dễ hiểu.`,
       config: {
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
           properties: {
-            name: { type: Type.STRING, description: "The name of the animal/object in Vietnamese" },
-            description: { type: Type.STRING, description: "A short simple description." },
-            funFact: { type: Type.STRING, description: 'A surprising or funny fact.' },
-            soundText: { type: Type.STRING, description: "The sound it makes." }
+            name: { type: Type.STRING },
+            description: { type: Type.STRING },
+            funFact: { type: Type.STRING },
+            soundText: { type: Type.STRING }
           },
           required: ["name", "description", "funFact", "soundText"]
         }
       }
     });
 
+    // Truy cập trực tiếp thuộc tính .text (không phải hàm)
     if (response.text) {
-      return JSON.parse(response.text) as FunFactData;
+      return JSON.parse(response.text.trim()) as FunFactData;
     }
-    throw new Error("No text in response");
+    throw new Error("Không nhận được phản hồi từ AI");
   } catch (error: any) {
-    console.error("Gemini API Error:", error);
+    console.error("Lỗi Gemini:", error);
     return {
       name: itemName,
-      description: "Chú bạn này đang bận đi chơi rồi, bé hãy thử lại sau nhé!",
-      funFact: "Bé có biết không? Khám phá luôn mang lại niềm vui!",
+      description: "Mô hình của bé thật là đẹp và bí ẩn!",
+      funFact: "Mỗi mô hình đều ẩn chứa một câu chuyện riêng.",
       soundText: "..."
     };
   }

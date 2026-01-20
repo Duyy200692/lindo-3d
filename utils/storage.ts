@@ -1,30 +1,20 @@
+
 import { DiscoveryItem, FunFactData, TextureMaps } from '../types';
 import { db, storage } from '../firebaseConfig';
-import { collection, addDoc, getDocs, deleteDoc, doc, query, orderBy, Timestamp } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import * as Firestore from 'firebase/firestore';
+import * as FirebaseStorage from 'firebase/storage';
+
+const { collection, addDoc, getDocs, deleteDoc, doc, query, orderBy, Timestamp } = Firestore as any;
+const { ref, uploadBytes, getDownloadURL } = FirebaseStorage as any;
 
 const COLLECTION_NAME = 'models';
 
-// Helper to upload a single blob and get URL
+// Hàm phụ để tải file lên Storage
 const uploadFile = async (path: string, blob: Blob): Promise<string> => {
-    if (!storage) {
-        throw new Error("Dịch vụ lưu trữ chưa được kích hoạt trong Firebase.");
-    }
-    
+    if (!storage) throw new Error("Storage chưa sẵn sàng.");
     const storageRef = ref(storage, path);
-    try {
-        await uploadBytes(storageRef, blob);
-        return await getDownloadURL(storageRef);
-    } catch (e: any) {
-        console.error("Storage Error:", e);
-        if (e.message?.includes('billing') || e.code === 'storage/retry-limit-exceeded') {
-            throw new Error("Bé ơi, Firebase yêu cầu nâng cấp gói 'Blaze' mới cho phép lưu file. Bé có thể nhờ ba mẹ giúp hoặc chỉ xem mô hình mà không lưu nhé!");
-        }
-        if (e.code === 'storage/unauthorized') {
-            throw new Error("Lỗi Quyền: Bé hãy kiểm tra lại cấu hình Rules trong Storage (cho phép allow write: if true).");
-        }
-        throw e;
-    }
+    await uploadBytes(storageRef, blob);
+    return await getDownloadURL(storageRef);
 };
 
 export const saveModelToLibrary = async (
@@ -34,35 +24,18 @@ export const saveModelToLibrary = async (
   textureMaps?: TextureMaps,
   resources?: { [key: string]: string }
 ): Promise<void> => {
-  if (!db) throw new Error("Database chưa sẵn sàng.");
+  if (!db || !storage) throw new Error("Firebase chưa kết nối thành công.");
 
   try {
     const uniqueId = `item-${Date.now()}`; 
     const folderPath = `models/${uniqueId}`;
 
-    // 1. Upload Main Model
+    // 1. Tải mô hình chính (.glb / .gltf)
     const modelRes = await fetch(modelBlobUrl);
     const modelBlob = await modelRes.blob();
-    const modelDownloadUrl = await uploadFile(`${folderPath}/model.glb`, modelBlob);
+    const modelDownloadUrl = await uploadFile(`${folderPath}/scene_main.glb`, modelBlob);
 
-    // 2. Upload Textures
-    const textureUrls: TextureMaps = {};
-    if (textureMaps) {
-      for (const [key, url] of Object.entries(textureMaps)) {
-        if (url && url.startsWith('blob:')) {
-          try {
-            const texRes = await fetch(url);
-            const texBlob = await texRes.blob();
-            const texUrl = await uploadFile(`${folderPath}/textures/${key}.png`, texBlob);
-            (textureUrls as any)[key] = texUrl;
-          } catch (e) {
-            console.warn(`Texture ${key} skipped`, e);
-          }
-        }
-      }
-    }
-
-    // 3. Upload Resources
+    // 2. Tải các tài nguyên đi kèm (textures, bin...)
     const resourceUrls: { [key: string]: string } = {};
     if (resources) {
       for (const [filename, url] of Object.entries(resources)) {
@@ -73,19 +46,17 @@ export const saveModelToLibrary = async (
              const resUrl = await uploadFile(`${folderPath}/resources/${filename}`, resBlob);
              resourceUrls[filename] = resUrl;
            } catch (e) {
-             console.warn(`Resource ${filename} skipped`, e);
+             console.warn(`Không tải được resource: ${filename}`, e);
            }
         }
       }
     }
 
-    // 4. Firestore record
+    // 3. Lưu thông tin vào Firestore
     await addDoc(collection(db, COLLECTION_NAME), {
-      originalId: item.id,
       name: factData.name,
       icon: item.icon,
       modelUrl: modelDownloadUrl,
-      textures: textureUrls,
       resources: resourceUrls,
       textureFlipY: item.textureFlipY || false,
       color: item.color,
@@ -96,7 +67,7 @@ export const saveModelToLibrary = async (
     });
 
   } catch (error: any) {
-    console.error("Save Failed:", error);
+    console.error("Lỗi khi lưu lên Firebase:", error);
     throw error;
   }
 };
@@ -106,15 +77,15 @@ export const loadLibrary = async (): Promise<{ item: DiscoveryItem, factData: Fu
   try {
     const q = query(collection(db, COLLECTION_NAME), orderBy('createdAt', 'desc'));
     const querySnapshot = await getDocs(q);
-    return querySnapshot.docs.map(doc => {
-      const data = doc.data();
+    return querySnapshot.docs.map((docSnap: any) => {
+      const data = docSnap.data();
       return {
-        item: { ...data, id: doc.id } as any,
+        item: { ...data, id: docSnap.id } as any,
         factData: data.factData as FunFactData
       };
     });
   } catch (e) {
-    console.error("Load Failed:", e);
+    console.error("Lỗi khi tải thư viện:", e);
     return [];
   }
 };
