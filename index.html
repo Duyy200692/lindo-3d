@@ -6,6 +6,10 @@
     <title>KiddoWorld 3D - Khám Phá Thế Giới</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <script>
+      // Shim for process.env to prevent ReferenceErrors in the browser
+      window.process = window.process || { env: {} };
+    </script>
     <style>
       html, body, #root {
         height: 100%;
@@ -15,9 +19,8 @@
       body {
         font-family: 'Fredoka', sans-serif;
         background-color: #f0f9ff;
-        overflow: hidden; /* Prevent scrolling on mobile for app-feel */
+        overflow: hidden;
       }
-      /* Custom scrollbar for content areas */
       .no-scrollbar::-webkit-scrollbar {
         display: none;
       }
@@ -25,8 +28,6 @@
         -ms-overflow-style: none;
         scrollbar-width: none;
       }
-      
-      /* 3D Scene Styles */
       .scene {
         perspective: 1000px;
         width: 100%;
@@ -40,18 +41,6 @@
         position: relative;
         transition: transform 0.1s linear;
       }
-      .cube-face {
-        position: absolute;
-        border: 4px solid rgba(0,0,0,0.1);
-        backface-visibility: visible;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-weight: bold;
-        color: white;
-        box-shadow: inset 0 0 20px rgba(0,0,0,0.1);
-      }
-      /* Floating Animation */
       @keyframes float {
         0% { transform: translateY(0px); }
         50% { transform: translateY(-10px); }

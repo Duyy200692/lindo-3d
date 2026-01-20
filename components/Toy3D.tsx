@@ -1,3 +1,4 @@
+
 import React, { Component, useRef, useState, useEffect, Suspense, ReactNode } from 'react';
 import { DiscoveryItem, TextureMaps } from '../types';
 import { Canvas, ThreeElements } from '@react-three/fiber';
@@ -5,9 +6,12 @@ import { useGLTF, OrbitControls, useAnimations, Environment, Center, Bounds } fr
 import * as THREE from 'three';
 
 // Extend JSX.IntrinsicElements to include Three.js elements
+// We nest this under React.JSX to ensure it merges correctly with standard HTML elements in modern React versions.
 declare global {
-  namespace JSX {
-    interface IntrinsicElements extends ThreeElements {}
+  namespace React {
+    namespace JSX {
+      interface IntrinsicElements extends ThreeElements {}
+    }
   }
 }
 
@@ -20,12 +24,13 @@ const Model = ({ url, textures, resources, textureFlipY = false }: { url: string
   const group = useRef<THREE.Group>(null);
   
   // Custom loader hook configuration using the low-level useGLTF with loader extension
-  const { scene, animations } = useGLTF(url, undefined, undefined, (loader) => {
+  // Added : any to loader to ensure compatibility across different THREE/GLTF versions
+  const { scene, animations } = useGLTF(url, undefined, undefined, (loader: any) => {
     // If we have separate resources (like .bin or separate textures for a .gltf file)
     // we need to tell the loader where to find them.
     if (resources) {
         loader.manager = new THREE.LoadingManager();
-        loader.manager.setURLModifier((url) => {
+        loader.manager.setURLModifier((url: string) => {
             // Extracts filename from full URL (e.g., "blob:..../scene.bin" -> "scene.bin")
             // Or if relative path is used internally by GLTF loader
             const fileName = url.replace(/^.*[\\\/]/, ''); 
