@@ -15,7 +15,8 @@
     "@google/genai": "^1.37.0",
     "three": "0.160.0",
     "@react-three/fiber": "8.16.8",
-    "@react-three/drei": "9.108.3"
+    "@react-three/drei": "9.108.3",
+    "firebase": "^12.8.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",

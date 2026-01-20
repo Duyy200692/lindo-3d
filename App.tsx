@@ -3,7 +3,8 @@ import { DiscoveryItem, AppMode, FunFactData, TextureMaps } from './types';
 import Toy3D from './components/Toy3D';
 import { fetchFunFact } from './services/geminiService';
 import { saveModelToLibrary, loadLibrary, deleteFromLibrary } from './utils/storage';
-import { Sparkles, ArrowLeft, Volume2, Rotate3d, Info, Upload, ArrowRight, Wand2, Save, Library, Trash2, Image as ImageIcon, Layers, Check, Zap, RefreshCw, Lightbulb } from 'lucide-react';
+import { db } from './firebaseConfig';
+import { Sparkles, ArrowLeft, Volume2, Rotate3d, Info, Upload, ArrowRight, Wand2, Save, Library, Trash2, Image as ImageIcon, Layers, Check, Zap, RefreshCw, Lightbulb, Wifi, WifiOff } from 'lucide-react';
 
 export default function App() {
   const [mode, setMode] = useState<AppMode>(AppMode.GALLERY);
@@ -12,12 +13,13 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [speaking, setSpeaking] = useState(false);
   const [savedItems, setSavedItems] = useState<{ item: DiscoveryItem, factData: FunFactData }[]>([]);
+  const [isOnline, setIsOnline] = useState(false);
   
   // State for the "Name Input" step
   const [showNameInput, setShowNameInput] = useState(false);
   const [tempModelUrl, setTempModelUrl] = useState<string | null>(null);
   const [tempTextures, setTempTextures] = useState<TextureMaps>({});
-  const [tempResources, setTempResources] = useState<{ [key: string]: string }>({}); // New: For .bin files
+  const [tempResources, setTempResources] = useState<{ [key: string]: string }>({}); 
   const [tempFlipY, setTempFlipY] = useState(false);
   const [customName, setCustomName] = useState("");
   const [isSaving, setIsSaving] = useState(false);
@@ -28,6 +30,8 @@ export default function App() {
   const multiTextureInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    // Check connection status
+    setIsOnline(!!db);
     loadSavedLibrary();
     return () => {
       window.speechSynthesis.cancel();
@@ -40,6 +44,8 @@ export default function App() {
       setSavedItems(library);
     } catch (e) {
       console.error("Failed to load library", e);
+      // Don't crash the app, just show empty list
+      setSavedItems([]);
     }
   };
 
@@ -285,7 +291,7 @@ export default function App() {
       setIsSaving(false);
     } catch (e) {
       console.error(e);
-      alert("Không lưu được, bộ nhớ đầy!");
+      alert("Không lưu được, bộ nhớ đầy hoặc mất kết nối!");
       setIsSaving(false);
     }
   };
@@ -384,6 +390,21 @@ export default function App() {
             <Rotate3d className="w-8 h-8 text-indigo-500" />
           </div>
           <h1 className="text-2xl font-bold text-slate-700 tracking-tight">Kiddo<span className="text-indigo-500">Builder</span></h1>
+        </div>
+        
+        {/* Status Indicator */}
+        <div className="flex items-center gap-2 bg-white/60 px-3 py-1.5 rounded-full backdrop-blur-sm border border-slate-100">
+           {isOnline ? (
+               <>
+                 <Wifi className="w-4 h-4 text-green-500" />
+                 <span className="text-xs font-bold text-green-600">Online</span>
+               </>
+           ) : (
+               <>
+                 <WifiOff className="w-4 h-4 text-slate-400" />
+                 <span className="text-xs font-bold text-slate-500">Offline</span>
+               </>
+           )}
         </div>
       </header>
 

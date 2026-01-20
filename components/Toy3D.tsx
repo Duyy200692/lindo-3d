@@ -1,8 +1,15 @@
 import React, { Component, useRef, useState, useEffect, Suspense, ReactNode } from 'react';
 import { DiscoveryItem, TextureMaps } from '../types';
-import { Canvas } from '@react-three/fiber';
+import { Canvas, ThreeElements } from '@react-three/fiber';
 import { useGLTF, OrbitControls, useAnimations, Environment, Center, Bounds } from '@react-three/drei';
 import * as THREE from 'three';
+
+// Extend JSX.IntrinsicElements to include Three.js elements
+declare global {
+  namespace JSX {
+    interface IntrinsicElements extends ThreeElements {}
+  }
+}
 
 interface Toy3DProps {
   item: DiscoveryItem;
@@ -233,7 +240,9 @@ const ImageModel = ({ item, size = 280 }: { item: DiscoveryItem, size?: number }
 
 interface ModelErrorBoundaryProps {
   fallback: ReactNode;
-  children: ReactNode;
+  children?: ReactNode; // Made optional to fix "property missing" in JSX
+  // Optional key to satisfy strict usage checks if necessary
+  key?: React.Key;
 }
 
 interface ModelErrorBoundaryState {
@@ -241,9 +250,14 @@ interface ModelErrorBoundaryState {
 }
 
 // Error Boundary specifically for the Canvas part to catch GLTF loading errors
-class ModelErrorBoundary extends React.Component<ModelErrorBoundaryProps, ModelErrorBoundaryState> {
+class ModelErrorBoundary extends Component<ModelErrorBoundaryProps, ModelErrorBoundaryState> {
+  // Explicitly define props to avoid TS error "Property 'props' does not exist on type..."
+  readonly props: Readonly<ModelErrorBoundaryProps>;
+  public state: ModelErrorBoundaryState = { hasError: false };
+
   constructor(props: ModelErrorBoundaryProps) {
     super(props);
+    this.props = props;
     this.state = { hasError: false };
   }
 

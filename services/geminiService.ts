@@ -1,20 +1,10 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { FunFactData } from "../types";
 
-// Initialize Gemini lazily inside the function to prevent "White Screen" crashes on startup
-// if the environment variable is missing or the runtime doesn't support global process access immediately.
-
 export const fetchFunFact = async (itemName: string): Promise<FunFactData> => {
   try {
-    // Check for API Key validity before making the call
-    // This allows the UI to render even if the key is missing (failed build config)
-    const apiKey = process.env.API_KEY;
-    if (!apiKey) {
-        console.error("API Key is missing. Please set REACT_APP_API_KEY or VITE_API_KEY in your Vercel Environment Variables.");
-        throw new Error("API Key not found");
-    }
-
-    const ai = new GoogleGenAI({ apiKey: apiKey });
+    // API Key must be obtained exclusively from process.env.API_KEY
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
@@ -38,9 +28,10 @@ export const fetchFunFact = async (itemName: string): Promise<FunFactData> => {
       return JSON.parse(response.text) as FunFactData;
     }
     throw new Error("No data returned");
-  } catch (error) {
+  } catch (error: any) {
     console.error("Gemini API Error:", error);
-    // Fallback data if API fails or key is missing
+
+    // Generic Fallback
     return {
       name: itemName,
       description: "Ồ! Có vẻ như chú này đang đi ngủ rồi. Bé hãy thử lại sau nhé!",
