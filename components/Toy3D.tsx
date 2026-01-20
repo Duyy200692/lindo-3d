@@ -5,13 +5,8 @@ import { Canvas, ThreeElements } from '@react-three/fiber';
 import { useGLTF, OrbitControls, useAnimations, Environment, Center, Bounds } from '@react-three/drei';
 import * as THREE from 'three';
 
-// Khai báo JSX Elements cho Three.js để tránh lỗi Property does not exist on type 'JSX.IntrinsicElements'
-// Chúng ta mở rộng interface IntrinsicElements từ ThreeElements của @react-three/fiber
-declare global {
-  namespace JSX {
-    interface IntrinsicElements extends ThreeElements {}
-  }
-}
+// Standard HTML elements are provided by React types. 
+// We use @ts-ignore for Three.js specific elements to avoid namespace conflicts when standard types are not augmented correctly.
 
 interface Toy3DProps {
   item: DiscoveryItem;
@@ -118,18 +113,38 @@ const Model = ({ url, textures, resources, textureFlipY = false }: { url: string
   }, [actions, scene, textures, textureFlipY]);
   
   return (
-    // @ts-ignore - Bỏ qua lỗi Property 'group' does not exist on type 'JSX.IntrinsicElements'
+    // @ts-ignore - Three.js custom element
     <group ref={group} dispose={null}>
-      {/* @ts-ignore - Bỏ qua lỗi Property 'primitive' does not exist on type 'JSX.IntrinsicElements' */}
+      {/* @ts-ignore - Three.js custom element */}
       <primitive object={scene} />
     </group>
   );
 };
 
-class ModelErrorBoundary extends Component<{fallback: ReactNode, children?: ReactNode}, {hasError: boolean}> {
-  state = { hasError: false };
-  static getDerivedStateFromError() { return { hasError: true }; }
-  render() { return this.state.hasError ? this.props.fallback : this.props.children; }
+interface ErrorBoundaryProps {
+  fallback: ReactNode;
+  children?: ReactNode;
+}
+
+interface ErrorBoundaryState {
+  hasError: boolean;
+}
+
+// Fix Property 'props' and 'state' errors by explicitly using React.Component and declaring property types
+class ModelErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  // Use property initializer instead of constructor to ensure 'state' is declared on the class
+  public state: ErrorBoundaryState = { hasError: false };
+
+  static getDerivedStateFromError() { 
+    return { hasError: true }; 
+  }
+  
+  render() { 
+    if (this.state.hasError) {
+      return this.props.fallback;
+    }
+    return this.props.children;
+  }
 }
 
 const Toy3D: React.FC<Toy3DProps> = ({ item }) => {
