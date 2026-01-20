@@ -4,8 +4,7 @@ import { DiscoveryItem, AppMode, FunFactData, TextureMaps } from './types';
 import Toy3D from './components/Toy3D';
 import { fetchFunFact } from './services/geminiService';
 import { saveModelToLibrary, loadLibrary, deleteFromLibrary } from './utils/storage';
-import { db, auth } from './firebaseConfig';
-import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { db } from './firebaseConfig';
 import { 
   Sparkles, ArrowLeft, Volume2, Rotate3d, Upload, 
   ArrowRight, Wand2, Save, Library, Trash2, 
@@ -22,7 +21,6 @@ export default function App() {
   const [speaking, setSpeaking] = useState(false);
   const [savedItems, setSavedItems] = useState<{ item: DiscoveryItem, factData: FunFactData }[]>([]);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
   
   // Admin logic
   const [isAdmin, setIsAdmin] = useState(false);
@@ -47,21 +45,7 @@ export default function App() {
     const handleStatusChange = () => setIsOnline(navigator.onLine);
     window.addEventListener('online', handleStatusChange);
     window.addEventListener('offline', handleStatusChange);
-    
-    // Tự động đăng nhập ẩn danh để thỏa mãn Rules: if request.auth != null
-    if (auth) {
-      signInAnonymously(auth)
-        .then(() => {
-          console.log("Đã kết nối Firebase (Ẩn danh)");
-          setIsAuthenticated(true);
-          loadSavedLibrary();
-        })
-        .catch((err) => {
-          console.error("Firebase Auth failed:", err);
-          loadSavedLibrary(); // Thử load dù auth lỗi
-        });
-    }
-
+    loadSavedLibrary();
     return () => {
       window.removeEventListener('online', handleStatusChange);
       window.removeEventListener('offline', handleStatusChange);
@@ -183,8 +167,6 @@ export default function App() {
   const handleSaveToLibrary = async () => {
     if (!selectedItem || !factData || !selectedItem.modelUrl) return;
     if (!isOnline) { alert("Cần có mạng để lưu mây ba mẹ nhé!"); return; }
-    if (!isAuthenticated) { alert("App đang chờ kết nối bảo mật với Firebase, ba mẹ đợi 1 giây rồi nhấn lại nhé!"); return; }
-    
     setIsSaving(true);
     try {
       await saveModelToLibrary(selectedItem, factData, selectedItem.modelUrl, selectedItem.textures, selectedItem.resources);
@@ -194,8 +176,7 @@ export default function App() {
       setSelectedItem(null);
       loadSavedLibrary();
     } catch (e: any) {
-      console.error("Save Error:", e);
-      alert(`Lỗi: ${e.message || "Không thể lưu. Ba mẹ kiểm tra lại quyền truy cập Storage nhé!"}`);
+      alert(`Lỗi: ${e.message}`);
       setIsSaving(false);
     }
   };
