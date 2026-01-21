@@ -1,4 +1,4 @@
-import React, { Component, useRef, useState, useEffect, Suspense, ReactNode } from 'react';
+import React, { useRef, useState, useEffect, Suspense } from 'react';
 import { DiscoveryItem, TextureMaps } from '../types';
 import { Canvas, useThree } from '@react-three/fiber';
 import { useGLTF, OrbitControls, useAnimations, Environment, Center, ContactShadows, Resize } from '@react-three/drei';
@@ -9,9 +9,10 @@ interface Toy3DProps {
   screenshotRef?: React.MutableRefObject<() => string | null>;
 }
 
-// Cấu hình Draco Decoder cố định từ CDN Google để đảm bảo ổn định
+// Cấu hình Draco Decoder từ CDN Google
 const DRACO_URL = 'https://www.gstatic.com/draco/versioned/decoders/1.5.7/';
 
+// Component xử lý chụp ảnh màn hình
 const ScreenshotHandler = ({ captureRef }: { captureRef?: React.MutableRefObject<() => string | null> }) => {
     const { gl, scene, camera } = useThree();
     useEffect(() => {
@@ -23,159 +24,197 @@ const ScreenshotHandler = ({ captureRef }: { captureRef?: React.MutableRefObject
                 } catch (e) { return null; }
             };
         }
-    }, [gl, scene, camera, captureRef]);
+    }, [captureRef, gl, scene, camera]);
     return null;
 };
 
-const Model = ({ url, textures, resources, textureFlipY = false }: { url: string, textures?: TextureMaps, resources?: {[key: string]: string}, textureFlipY?: boolean }) => {
+// Component hiển thị Model
+const Model = ({ url, textures, textureFlipY = false }: { url: string, textures?: TextureMaps, textureFlipY?: boolean }) => {
   const group = useRef<THREE.Group>(null);
   
+  // Tải model (lúc này URL đã được làm sạch thành blob:...)
   const { scene, animations } = useGLTF(url, true, true, (loader: any) => {
-    loader.setCrossOrigin('anonymous');
-    
-    // Cài đặt đường dẫn Draco Decoder thủ công
     if (loader.setDRACOLoader) {
-        const dracoLoader = loader.dracoLoader; // Lấy instance có sẵn nếu có
-        if (dracoLoader) {
-            dracoLoader.setDecoderPath(DRACO_URL);
-            dracoLoader.setDecoderConfig({ type: 'js' });
-        }
-    }
-
-    // Logic xử lý file .gltf tách rời (Cloud hoặc Local)
-    const isGltf = resources 
-        ? Object.keys(resources).some(k => k.toLowerCase().endsWith('.gltf')) 
-        : url.toLowerCase().includes('.gltf');
-
-    // FIX QUAN TRỌNG: Không new THREE.LoadingManager() mà dùng lại manager của loader
-    // để tránh làm hỏng các thiết lập nội bộ của useGLTF.
-    if (isGltf && resources && Object.keys(resources).length > 0) {
-        loader.manager.setURLModifier((requestUrl: string) => {
-            // Giải mã URL và lấy tên file
-            const decodedUrl = decodeURIComponent(requestUrl);
-            // Regex lấy tên file cuối cùng, bỏ qua query param
-            const fileName = decodedUrl.replace(/^.*[\\\/]/, '').replace(/[\?#].*$/, '');
-            
-            // Nếu tìm thấy file trong danh sách resources, trả về URL đầy đủ (có token)
-            if (resources[fileName]) {
-                return resources[fileName];
-            }
-            return requestUrl;
-        });
+        const draco = loader.dracoLoader || new THREE.DRACOLoader();
+        draco.setDecoderPath(DRACO_URL);
+        loader.setDRACOLoader(draco);
     }
   });
 
   const { actions } = useAnimations(animations, group);
 
+  // Xử lý Animation và Texture
   useEffect(() => {
+    // Play animations
     if (actions) {
-      Object.values(actions).forEach((action: any) => {
-        try { action?.reset().fadeIn(0.5).play(); } catch(e) {}
-      });
+        Object.values(actions).forEach((action: any) => {
+            try { action?.reset().fadeIn(0.5).play(); } catch(e) {}
+        });
     }
 
-    const applyTextures = async () => {
-      if (!textures) return;
-      const loader = new THREE.TextureLoader();
-      loader.setCrossOrigin('anonymous');
-
-      const loadedMaps: { [key: string]: THREE.Texture } = {};
-      const textureEntries = Object.entries(textures).filter(([_, url]) => !!url);
-      
-      await Promise.all(textureEntries.map(async ([key, url]) => {
-        try {
-          const tex = await loader.loadAsync(url!);
-          tex.flipY = textureFlipY; 
-          if (key === 'map') tex.colorSpace = THREE.SRGBColorSpace;
-          loadedMaps[key] = tex;
-        } catch (err) { console.error(`Lỗi texture ${key}`, err); }
-      }));
-
-      scene.traverse((child) => {
-        if ((child as THREE.Mesh).isMesh) {
-          const mesh = child as THREE.Mesh;
-          mesh.castShadow = true;
-          mesh.receiveShadow = true;
-          const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-          
-          materials.forEach((mat: any) => {
-            if (mat.isMeshStandardMaterial) {
-              if (loadedMaps.map) { mat.map = loadedMaps.map; mat.color.setHex(0xffffff); }
-              if (loadedMaps.normalMap) { mat.normalMap = loadedMaps.normalMap; }
-              if (loadedMaps.roughnessMap) { mat.roughnessMap = loadedMaps.roughnessMap; mat.roughness = 1; }
-              if (loadedMaps.metalnessMap) { mat.metalnessMap = loadedMaps.metalnessMap; mat.metalness = 1; }
-              if (loadedMaps.aoMap) { mat.aoMap = loadedMaps.aoMap; }
-              if (loadedMaps.emissiveMap) { mat.emissiveMap = loadedMaps.emissiveMap; mat.emissive.setHex(0xffffff); }
-              mat.needsUpdate = true;
-            }
-          });
-        }
-      });
-    };
-    applyTextures();
+    // Apply textures
+    if (textures) {
+        const texLoader = new THREE.TextureLoader();
+        const applyMap = async () => {
+             const entries = Object.entries(textures).filter(([_, val]) => !!val);
+             for (const [key, val] of entries) {
+                 try {
+                     const tex = await texLoader.loadAsync(val!);
+                     tex.flipY = textureFlipY;
+                     if (key === 'map') tex.colorSpace = THREE.SRGBColorSpace;
+                     
+                     scene.traverse((child: any) => {
+                         if (child.isMesh && child.material) {
+                             const m = child.material;
+                             if (key === 'map') m.map = tex;
+                             if (key === 'normalMap') m.normalMap = tex;
+                             if (key === 'roughnessMap') m.roughnessMap = tex;
+                             if (key === 'metalnessMap') m.metalnessMap = tex;
+                             if (key === 'aoMap') m.aoMap = tex;
+                             if (key === 'emissiveMap') m.emissiveMap = tex;
+                             m.needsUpdate = true;
+                         }
+                     });
+                 } catch (e) { console.warn("Lỗi texture:", key); }
+             }
+        };
+        applyMap();
+    }
   }, [actions, scene, textures, textureFlipY]);
   
   return (
     // @ts-ignore
     <group ref={group} dispose={null}>
-      {/* @ts-ignore */}
+       {/* @ts-ignore */}
       <primitive object={scene} />
     </group>
   );
 };
 
-interface ModelErrorBoundaryProps { fallback: (error: any) => ReactNode; children?: ReactNode; }
-interface ModelErrorBoundaryState { hasError: boolean; error: any; }
+// Hook thông minh để xử lý URL dài thành URL ngắn (Blob)
+const usePatchedModelUrl = (item: DiscoveryItem) => {
+    const [patchedUrl, setPatchedUrl] = useState<string | null>(null);
+    const [error, setError] = useState<string | null>(null);
 
-class ModelErrorBoundary extends React.Component<ModelErrorBoundaryProps, ModelErrorBoundaryState> {
-  constructor(props: ModelErrorBoundaryProps) {
+    useEffect(() => {
+        let isMounted = true;
+        
+        const process = async () => {
+            if (!item.modelUrl) return;
+
+            // 1. Nếu là file .glb hoặc không có resources rời -> Dùng luôn URL gốc
+            if (!item.resources || Object.keys(item.resources).length === 0 || item.modelUrl.toLowerCase().includes('.glb')) {
+                setPatchedUrl(item.modelUrl);
+                return;
+            }
+
+            // 2. Nếu là file .gltf có resources (Cloud) -> Patch lại nội dung
+            try {
+                // Tải nội dung file .gltf text về
+                const response = await fetch(item.modelUrl);
+                const json = await response.json();
+
+                // Thay thế đường dẫn buffers (file .bin)
+                if (json.buffers) {
+                    json.buffers.forEach((b: any) => {
+                        const name = b.uri ? b.uri.split('/').pop().replace(/[\?#].*$/, '') : '';
+                        // Tìm trong resources xem có file này không
+                        const resKey = Object.keys(item.resources!).find(k => k.includes(name));
+                        if (resKey && item.resources![resKey]) {
+                            b.uri = item.resources![resKey]; // Thay thế bằng URL Cloud đầy đủ
+                        }
+                    });
+                }
+
+                // Thay thế đường dẫn images (nếu texture nhúng trong gltf)
+                if (json.images) {
+                    json.images.forEach((img: any) => {
+                        if (img.uri && !img.uri.startsWith('data:')) {
+                            const name = img.uri.split('/').pop().replace(/[\?#].*$/, '');
+                            const resKey = Object.keys(item.resources!).find(k => k.includes(name));
+                            if (resKey && item.resources![resKey]) {
+                                img.uri = item.resources![resKey];
+                            }
+                        }
+                    });
+                }
+
+                // Tạo file Blob mới từ JSON đã sửa
+                const blob = new Blob([JSON.stringify(json)], { type: 'application/json' });
+                const blobUrl = URL.createObjectURL(blob);
+                
+                if (isMounted) setPatchedUrl(blobUrl);
+
+            } catch (err: any) {
+                console.error("Lỗi patch GLTF:", err);
+                if (isMounted) setError(err.message);
+            }
+        };
+
+        process();
+        return () => { isMounted = false; };
+    }, [item.modelUrl, item.resources, item.id]);
+
+    return { patchedUrl, error };
+};
+
+// Error Boundary đơn giản hóa
+interface ErrorBoundaryProps {
+    fallback: React.ReactNode;
+    children: React.ReactNode;
+}
+
+interface ErrorBoundaryState {
+    hasError: boolean;
+}
+
+class ModelErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  constructor(props: ErrorBoundaryProps) {
     super(props);
-    this.state = { hasError: false, error: null };
+    this.state = { hasError: false };
   }
 
-  static getDerivedStateFromError(error: any) { return { hasError: true, error }; }
+  static getDerivedStateFromError() { return { hasError: true }; }
   
-  componentDidCatch(error: any, errorInfo: any) {
-    console.error("Model Error:", error);
-  }
-
-  render() { 
-    if (this.state.hasError) {
-      return this.props.fallback(this.state.error);
-    }
-    return this.props.children; 
-  }
+  render() { return this.state.hasError ? this.props.fallback : this.props.children; }
 }
 
 const Toy3D: React.FC<Toy3DProps> = ({ item, screenshotRef }) => {
-  if (item.modelUrl) {
-    return (
+  const { patchedUrl, error } = usePatchedModelUrl(item);
+
+  if (!item.modelUrl) {
+    return <div className="flex items-center justify-center w-full h-full"><span className="text-6xl">{item.icon}</span></div>;
+  }
+
+  if (error) {
+     return (
+        <div className="flex flex-col items-center justify-center h-full text-center p-4">
+             <span className="text-4xl mb-2">🤕</span>
+             <p className="text-red-500 font-bold text-sm">Không tải được file</p>
+             <button onClick={() => window.location.reload()} className="mt-2 text-xs bg-indigo-500 text-white px-3 py-1 rounded-lg">Tải lại</button>
+        </div>
+     )
+  }
+
+  if (!patchedUrl) {
+      return (
+          <div className="flex items-center justify-center h-full">
+              <div className="w-8 h-8 border-4 border-indigo-200 border-t-indigo-500 rounded-full animate-spin"></div>
+          </div>
+      )
+  }
+
+  return (
       <div className="absolute inset-0 w-full h-full z-0 touch-none outline-none">
-        <ModelErrorBoundary key={item.id} fallback={(error) => (
-            <div className="flex flex-col items-center justify-center h-full text-center px-4">
-                <div className="bg-white/90 backdrop-blur-sm p-6 rounded-3xl border-2 border-red-100 shadow-xl max-w-xs">
-                    <span className="text-4xl block mb-2">🤕</span>
-                    <span className="text-red-500 font-bold block mb-1">Ối! Lỗi tải mô hình rồi</span>
-                    <div className="text-[10px] text-slate-500 bg-slate-100 p-2 rounded-lg mb-2 overflow-auto max-h-20 text-left w-full break-words font-mono">
-                        {error?.message || "Lỗi không xác định"}
-                    </div>
-                    <span className="text-xs text-slate-400 block mb-3">
-                        {error?.message?.includes('403') || error?.message?.includes('Network') 
-                            ? "Có thể do quyền truy cập Cloud (CORS) chưa được mở." 
-                            : "File mô hình có thể bị hỏng."}
-                    </span>
-                    <button 
-                        onClick={() => window.location.reload()}
-                        className="w-full px-4 py-2 bg-indigo-500 text-white rounded-xl text-xs font-bold shadow-lg hover:bg-indigo-600 transition-all"
-                    >
-                        Thử tải lại trang
-                    </button>
-                </div>
+        <ModelErrorBoundary fallback={
+             <div className="flex flex-col items-center justify-center h-full text-center p-4">
+                <span className="text-4xl mb-2">🤔</span>
+                <p className="text-slate-500 font-bold text-sm">File mô hình bị lỗi rồi</p>
             </div>
-        )}>
+        }>
           <Canvas 
             shadows 
-            dpr={[1, 1.5]} // Giảm dpr tối đa xuống 1.5 để đỡ lag trên mobile
+            dpr={[1, 1.5]}
             camera={{ fov: 45, position: [0, 1, 6] }}
             gl={{ preserveDrawingBuffer: true }} 
           >
@@ -184,9 +223,8 @@ const Toy3D: React.FC<Toy3DProps> = ({ item, screenshotRef }) => {
               <Center>
                 <Resize scale={4}>
                   <Model 
-                      url={item.modelUrl} 
+                      url={patchedUrl} 
                       textures={item.textures} 
-                      resources={item.resources} 
                       textureFlipY={item.textureFlipY} 
                   />
                 </Resize>
@@ -202,13 +240,6 @@ const Toy3D: React.FC<Toy3DProps> = ({ item, screenshotRef }) => {
           </Canvas>
         </ModelErrorBoundary>
       </div>
-    );
-  }
-
-  return (
-    <div className="flex flex-col items-center justify-center w-64 h-64 bg-white/40 rounded-full shadow-inner animate-float">
-      <span className="text-9xl filter drop-shadow-2xl">{item.icon}</span>
-    </div>
   );
 };
 
