@@ -125,39 +125,76 @@ export const saveModelToLibrary = async (
 };
 
 export const loadLibrary = async (): Promise<{ item: DiscoveryItem, factData: FunFactData }[]> => {
-  let localItems: any[] = [];
-  let cloudItems: any[] = [];
+  let allItemsRaw: any[] = [];
 
-  // Load Local trước để hiển thị nhanh
+  // 1. Load Local
   try {
-      localItems = await loadFromLocalDB();
+      const local = await loadFromLocalDB();
+      // Đánh dấu items local và thêm timestamp giả định nếu thiếu
+      const localFormatted = local.map(l => ({
+          ...l,
+          createdAtTime: Date.now(), // Local coi như mới nhất tạm thời nếu không có time
+          isLocal: true
+      }));
+      allItemsRaw = [...allItemsRaw, ...localFormatted];
   } catch (e) { console.error("Lỗi load local:", e); }
 
-  // Load Cloud nếu có mạng
+  // 2. Load Cloud (QUAN TRỌNG: Không dùng orderBy để tránh lỗi Index)
   if (db) {
     try {
-        const q = query(collection(db, COLLECTION_NAME), orderBy('createdAt', 'desc'));
+        const q = query(collection(db, COLLECTION_NAME));
         const querySnapshot = await getDocs(q);
         
-        cloudItems = querySnapshot.docs.map((docSnap: any) => {
+        const cloudItems = querySnapshot.docs.map((docSnap: any) => {
             const data = docSnap.data();
+            
+            // Xử lý an toàn cho createdAt (có thể là Timestamp object hoặc null)
+            let timeVal = 0;
+            if (data.createdAt && data.createdAt.seconds) {
+                timeVal = data.createdAt.seconds * 1000;
+            } else if (typeof data.createdAt === 'number') {
+                timeVal = data.createdAt;
+            }
+
             return {
                 item: { 
                     ...data, 
-                    id: docSnap.id, // ID từ Firestore
+                    id: docSnap.id, 
                     modelType: data.modelType || 'model'
                 } as any,
-                factData: data.factData as FunFactData
+                factData: data.factData as FunFactData,
+                createdAtTime: timeVal,
+                isLocal: false
             };
         });
+        
+        allItemsRaw = [...allItemsRaw, ...cloudItems];
+        console.log(`Đã tải ${cloudItems.length} mô hình từ Cloud`);
     } catch (e) {
         console.error("Không tải được dữ liệu Cloud:", e);
     }
   }
 
-  // Gộp dữ liệu: Ưu tiên Cloud Items, sau đó đến Local Items (những cái chưa được đồng bộ)
-  // Logic đơn giản: Hiển thị tất cả, người dùng sẽ thấy trùng nếu vừa save xong (chấp nhận được ở mức này)
-  return [...cloudItems, ...localItems.filter(l => l.id.startsWith('temp-') || l.item.modelUrl === 'local')];
+  // 3. Lọc trùng và Sắp xếp Client-side (Mới nhất lên đầu)
+  // Ưu tiên Cloud item nếu trùng ID (trừ temp-id)
+  const uniqueMap = new Map();
+  allItemsRaw.forEach(entry => {
+      // Nếu đã có item này rồi, và item hiện tại là Cloud thì ghi đè (ưu tiên Cloud)
+      if (uniqueMap.has(entry.item.id)) {
+          if (!entry.isLocal) {
+              uniqueMap.set(entry.item.id, entry);
+          }
+      } else {
+          uniqueMap.set(entry.item.id, entry);
+      }
+  });
+
+  const finalItems = Array.from(uniqueMap.values());
+  
+  // Sắp xếp giảm dần theo thời gian
+  finalItems.sort((a: any, b: any) => b.createdAtTime - a.createdAtTime);
+
+  return finalItems.map(entry => ({ item: entry.item, factData: entry.factData }));
 };
 
 export const deleteFromLibrary = async (id: string): Promise<void> => {

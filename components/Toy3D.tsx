@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect, Suspense, ReactNode, Component } from 'react';
+import React, { useRef, useState, useEffect, Suspense, ReactNode } from 'react';
 import { DiscoveryItem, TextureMaps } from '../types';
 import { Canvas, useThree } from '@react-three/fiber';
 import { useGLTF, OrbitControls, useAnimations, Environment, Center, ContactShadows, Resize } from '@react-three/drei';
@@ -123,11 +123,16 @@ const Model = ({ url, textures, resources, textureFlipY = false }: { url: string
 interface ModelErrorBoundaryProps { fallback: ReactNode; children?: ReactNode; }
 interface ModelErrorBoundaryState { hasError: boolean; }
 
-class ModelErrorBoundary extends Component<ModelErrorBoundaryProps, ModelErrorBoundaryState> {
+class ModelErrorBoundary extends React.Component<ModelErrorBoundaryProps, ModelErrorBoundaryState> {
+  // Use property initializer instead of constructor to satisfy strict property initialization and type checking
   state: ModelErrorBoundaryState = { hasError: false };
 
   static getDerivedStateFromError() { return { hasError: true }; }
   
+  componentDidCatch(error: any, errorInfo: any) {
+    console.error("Model Error Boundary caught error:", error, errorInfo);
+  }
+
   render() { 
     if (this.state.hasError) {
       return this.props.fallback;

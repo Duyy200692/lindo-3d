@@ -15,6 +15,7 @@ export default function App() {
   const [savedItems, setSavedItems] = useState<{ item: DiscoveryItem, factData: FunFactData }[]>([]);
   const [isOnline, setIsOnline] = useState(true);
   const [isAppReady, setIsAppReady] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   
   // State for visibility toggle
   const [showInfo, setShowInfo] = useState(true);
@@ -56,11 +57,14 @@ export default function App() {
   }, []);
 
   const loadSavedLibrary = async () => {
+    setIsRefreshing(true);
     try {
       const library = await loadLibrary();
       setSavedItems(library);
     } catch (e) {
       console.error("Failed to load library", e);
+    } finally {
+      setIsRefreshing(false);
     }
   };
 
@@ -348,16 +352,25 @@ export default function App() {
             </div>
             <h1 className="text-2xl font-bold text-slate-700 tracking-tight">Kiddo<span className="text-indigo-500">Builder</span></h1>
             </div>
-            <div className="flex items-center gap-2 bg-white/60 px-3 py-1.5 rounded-full backdrop-blur-sm border border-slate-100 shadow-sm">
-            {isOnline ? (
-                db ? (
-                     <><Wifi className="w-4 h-4 text-green-500" /><span className="text-xs font-bold text-green-600">Cloud Sync</span></>
+            <div className="flex items-center gap-2">
+                <button 
+                  onClick={() => loadSavedLibrary()} 
+                  className={`p-2 rounded-full border border-slate-100 bg-white/60 text-slate-500 hover:text-indigo-500 hover:bg-white active:scale-95 transition-all ${isRefreshing ? 'animate-spin' : ''}`}
+                  title="Tải lại danh sách"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                </button>
+                <div className="flex items-center gap-2 bg-white/60 px-3 py-1.5 rounded-full backdrop-blur-sm border border-slate-100 shadow-sm">
+                {isOnline ? (
+                    db ? (
+                        <><Wifi className="w-4 h-4 text-green-500" /><span className="text-xs font-bold text-green-600">Cloud Sync</span></>
+                    ) : (
+                        <><HardDrive className="w-4 h-4 text-orange-500" /><span className="text-xs font-bold text-orange-600">Thiết bị</span></>
+                    )
                 ) : (
-                     <><HardDrive className="w-4 h-4 text-orange-500" /><span className="text-xs font-bold text-orange-600">Thiết bị</span></>
-                )
-            ) : (
-                <><WifiOff className="w-4 h-4 text-slate-400" /><span className="text-xs font-bold text-slate-500">Offline</span></>
-            )}
+                    <><WifiOff className="w-4 h-4 text-slate-400" /><span className="text-xs font-bold text-slate-500">Offline</span></>
+                )}
+                </div>
             </div>
         </header>
       )}
@@ -384,9 +397,12 @@ export default function App() {
             </div>
 
             <div className="flex-1 overflow-hidden flex flex-col">
-              <div className="flex items-center gap-2 mb-3 px-2">
-                <Library className="w-5 h-5 text-indigo-500" />
-                <h3 className="text-lg font-bold text-slate-700">Bộ Sưu Tập Của Bé</h3>
+              <div className="flex items-center gap-2 mb-3 px-2 justify-between">
+                <div className="flex items-center gap-2">
+                    <Library className="w-5 h-5 text-indigo-500" />
+                    <h3 className="text-lg font-bold text-slate-700">Bộ Sưu Tập Của Bé</h3>
+                </div>
+                {savedItems.length > 0 && <span className="text-xs font-bold bg-indigo-100 text-indigo-600 px-2 py-0.5 rounded-full">{savedItems.length}</span>}
               </div>
               <div className="flex-1 overflow-y-auto no-scrollbar space-y-3 pb-4 px-1">
                 {savedItems.length === 0 ? (
