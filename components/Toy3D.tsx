@@ -106,45 +106,72 @@ const usePatchedModelUrl = (item: DiscoveryItem) => {
         const process = async () => {
             if (!item.modelUrl) return;
 
-            // Nếu là file .glb đơn giản hoặc không có resources đi kèm thì dùng luôn
-            if (!item.resources || Object.keys(item.resources).length === 0 || item.modelUrl.toLowerCase().includes('.glb')) {
-                setPatchedUrl(item.modelUrl);
-                return;
-            }
-
             try {
-                // 1. Tải nội dung file .gltf
+                // Bước 1: Tải file chính về Blob (Bắt buộc để tránh lỗi URL dài/lạ)
                 const response = await fetch(item.modelUrl);
-                if (!response.ok) throw new Error("Không thể tải file .gltf gốc");
-                const json = await response.json();
+                if (!response.ok) throw new Error(`Không tải được file gốc (${response.status})`);
+                
+                const mainBlob = await response.blob();
+                
+                // Bước 2: Kiểm tra xem file này là GLB (Binary) hay GLTF (JSON)
+                // Đọc 4 byte đầu tiên để xem magic number 'glTF'
+                const headerBuffer = await mainBlob.slice(0, 4).arrayBuffer();
+                const headerView = new DataView(headerBuffer);
+                const isBinaryGLB = headerView.byteLength >= 4 && headerView.getUint32(0, true) === 0x46546C67; // Magic 0x46546C67 = 'glTF'
 
-                // Hàm hỗ trợ: Tải file phụ về Blob và trả về URL ngắn (blob:...)
+                // Nếu là GLB hoặc URL kết thúc bằng .glb, dùng luôn Blob này
+                if (isBinaryGLB || item.modelUrl.toLowerCase().split('?')[0].endsWith('.glb')) {
+                    const blobUrl = URL.createObjectURL(mainBlob);
+                    generatedUrls.push(blobUrl);
+                    if (isMounted) setPatchedUrl(blobUrl);
+                    return;
+                }
+
+                // Bước 3: Nếu là GLTF (Text), cần parse và vá đường dẫn resources
+                const text = await mainBlob.text();
+                let json;
+                try {
+                    json = JSON.parse(text);
+                } catch (e) {
+                    // Nếu parse lỗi, có thể nó là binary nhưng check magic number thất bại
+                    // Fallback: cứ thử dùng blob gốc
+                    console.warn("Không parse được JSON, fallback sang Blob gốc");
+                    const fallbackUrl = URL.createObjectURL(mainBlob);
+                    generatedUrls.push(fallbackUrl);
+                    if (isMounted) setPatchedUrl(fallbackUrl);
+                    return;
+                }
+
+                // Hàm hỗ trợ: Tìm và tải file phụ
                 const fetchToBlobUrl = async (originalUri: string) => {
-                    // Lấy tên file sạch (bỏ path và query param)
-                    const cleanName = originalUri.split('/').pop()?.replace(/[\?#].*$/, '') || '';
+                    // Giải mã URI (ví dụ: "scene%20(1).bin" -> "scene (1).bin")
+                    const decodedUri = decodeURIComponent(originalUri);
+                    const cleanName = decodedUri.split('/').pop()?.replace(/[\?#].*$/, '') || '';
                     
-                    // Tìm trong resources xem có file này không
-                    const resKey = Object.keys(item.resources!).find(k => k.endsWith(cleanName) || k === cleanName);
+                    // Tìm trong resources (so sánh cả tên gốc và tên decode)
+                    const resKey = Object.keys(item.resources || {}).find(k => {
+                        const decodedKey = decodeURIComponent(k);
+                        return decodedKey.endsWith(cleanName) || decodedKey === cleanName || k.endsWith(cleanName);
+                    });
                     
                     if (resKey && item.resources![resKey]) {
-                        // Tải file thật từ Cloud
                         const resResponse = await fetch(item.resources![resKey]);
                         const blob = await resResponse.blob();
                         const blobUrl = URL.createObjectURL(blob);
-                        generatedUrls.push(blobUrl); // Đánh dấu để xóa sau
+                        generatedUrls.push(blobUrl);
                         return blobUrl;
                     }
-                    return originalUri; // Fallback (thường sẽ lỗi nếu là path tương đối)
+                    return originalUri;
                 };
 
-                // 2. Vá đường dẫn Buffers (.bin)
+                // Vá đường dẫn Buffers (.bin)
                 if (json.buffers) {
                     await Promise.all(json.buffers.map(async (b: any) => {
                         if (b.uri) b.uri = await fetchToBlobUrl(b.uri);
                     }));
                 }
 
-                // 3. Vá đường dẫn Images (Textures trong file)
+                // Vá đường dẫn Images
                 if (json.images) {
                     await Promise.all(json.images.map(async (img: any) => {
                         if (img.uri && !img.uri.startsWith('data:')) {
@@ -153,7 +180,7 @@ const usePatchedModelUrl = (item: DiscoveryItem) => {
                     }));
                 }
 
-                // 4. Tạo file .gltf mới từ nội dung đã vá
+                // Tạo file .gltf mới
                 const gltfBlob = new Blob([JSON.stringify(json)], { type: 'application/json' });
                 const gltfUrl = URL.createObjectURL(gltfBlob);
                 generatedUrls.push(gltfUrl);
@@ -162,13 +189,12 @@ const usePatchedModelUrl = (item: DiscoveryItem) => {
 
             } catch (err: any) {
                 console.error("Lỗi xử lý model:", err);
-                if (isMounted) setError(err.message);
+                if (isMounted) setError(err.message || "Lỗi không xác định");
             }
         };
 
         process();
 
-        // Cleanup: Xóa các Blob URL khi component unmount để giải phóng bộ nhớ
         return () => {
             isMounted = false;
             generatedUrls.forEach(url => URL.revokeObjectURL(url));
@@ -189,11 +215,16 @@ interface ErrorBoundaryState {
 }
 
 class ModelErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  public state: ErrorBoundaryState = { hasError: false };
+  constructor(props: ErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false };
+  }
 
   static getDerivedStateFromError() { return { hasError: true }; }
   
-  render() { return this.state.hasError ? this.props.fallback : this.props.children; }
+  render() { 
+    return this.state.hasError ? this.props.fallback : this.props.children; 
+  }
 }
 
 const Toy3D: React.FC<Toy3DProps> = ({ item, screenshotRef }) => {
