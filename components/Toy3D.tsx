@@ -1,28 +1,59 @@
-import React, { useRef, useState, useEffect, Suspense, ReactNode } from 'react';
+import React, { useRef, useState, useEffect, Suspense, ReactNode, Component } from 'react';
 import { DiscoveryItem, TextureMaps } from '../types';
-import { Canvas } from '@react-three/fiber';
-import { useGLTF, OrbitControls, useAnimations, Environment, Center, Bounds, ContactShadows, Resize } from '@react-three/drei';
+import { Canvas, useThree } from '@react-three/fiber';
+import { useGLTF, OrbitControls, useAnimations, Environment, Center, ContactShadows, Resize } from '@react-three/drei';
 import * as THREE from 'three';
 
 interface Toy3DProps {
   item: DiscoveryItem;
+  screenshotRef?: React.MutableRefObject<() => string | null>; // Prop mới để nhận hàm chụp ảnh
 }
+
+// Component phụ để truy cập vào gl context và thực hiện chụp ảnh
+const ScreenshotHandler = ({ captureRef }: { captureRef?: React.MutableRefObject<() => string | null> }) => {
+    const { gl, scene, camera } = useThree();
+
+    useEffect(() => {
+        if (captureRef) {
+            captureRef.current = () => {
+                try {
+                    // Render lại một khung hình để đảm bảo buffer có dữ liệu
+                    gl.render(scene, camera);
+                    // Lấy dữ liệu ảnh dưới dạng base64 (JPEG, chất lượng 0.5 để nhẹ)
+                    return gl.domElement.toDataURL('image/jpeg', 0.5);
+                } catch (e) {
+                    console.error("Lỗi chụp màn hình:", e);
+                    return null;
+                }
+            };
+        }
+    }, [gl, scene, camera, captureRef]);
+
+    return null;
+};
 
 const Model = ({ url, textures, resources, textureFlipY = false }: { url: string, textures?: TextureMaps, resources?: {[key: string]: string}, textureFlipY?: boolean }) => {
   const group = useRef<THREE.Group>(null);
   
   // Tải mô hình
   const { scene, animations } = useGLTF(url, undefined, undefined, (loader: any) => {
+    // Luôn set CrossOrigin để tránh lỗi CORS với hình ảnh từ Firebase/Blob
+    loader.crossOrigin = 'anonymous';
+
     if (resources) {
         loader.manager = new THREE.LoadingManager();
         loader.manager.setURLModifier((url: string) => {
-            // Lấy tên file bằng cách bỏ hết path phía trước VÀ bỏ cả query params phía sau (ví dụ ?token=...)
-            // Regex: Lấy phần sau dấu / hoặc \ cuối cùng, sau đó bỏ phần từ dấu ? hoặc # trở đi
-            const fileName = url.replace(/^.*[\\\/]/, '').replace(/[\?#].*$/, '');
+            // 1. Decode URL để xử lý %20 (khoảng trắng) và các ký tự đặc biệt
+            const decodedUrl = decodeURIComponent(url);
             
+            // 2. Lấy tên file gốc
+            const fileName = decodedUrl.replace(/^.*[\\\/]/, '').replace(/[\?#].*$/, '');
+            
+            // 3. Tìm trong resources
             if (resources[fileName]) {
                 return resources[fileName];
             }
+            
             return url;
         });
     }
@@ -42,6 +73,8 @@ const Model = ({ url, textures, resources, textureFlipY = false }: { url: string
     const applyTextures = async () => {
       if (!textures) return;
       const loader = new THREE.TextureLoader();
+      loader.setCrossOrigin('anonymous'); // Quan trọng cho texture
+
       const loadedMaps: { [key: string]: THREE.Texture } = {};
       const textureEntries = Object.entries(textures).filter(([_, url]) => !!url);
       
@@ -51,7 +84,7 @@ const Model = ({ url, textures, resources, textureFlipY = false }: { url: string
           tex.flipY = textureFlipY; 
           if (key === 'map') tex.colorSpace = THREE.SRGBColorSpace;
           loadedMaps[key] = tex;
-        } catch (err) { console.error(err); }
+        } catch (err) { console.error(`Lỗi tải texture ${key}:`, err); }
       }));
 
       scene.traverse((child) => {
@@ -90,7 +123,7 @@ const Model = ({ url, textures, resources, textureFlipY = false }: { url: string
 interface ModelErrorBoundaryProps { fallback: ReactNode; children?: ReactNode; }
 interface ModelErrorBoundaryState { hasError: boolean; }
 
-class ModelErrorBoundary extends React.Component<ModelErrorBoundaryProps, ModelErrorBoundaryState> {
+class ModelErrorBoundary extends Component<ModelErrorBoundaryProps, ModelErrorBoundaryState> {
   state: ModelErrorBoundaryState = { hasError: false };
 
   static getDerivedStateFromError() { return { hasError: true }; }
@@ -103,14 +136,19 @@ class ModelErrorBoundary extends React.Component<ModelErrorBoundaryProps, ModelE
   }
 }
 
-const Toy3D: React.FC<Toy3DProps> = ({ item }) => {
+const Toy3D: React.FC<Toy3DProps> = ({ item, screenshotRef }) => {
   if (item.modelUrl) {
     return (
       <div className="absolute inset-0 w-full h-full z-0 touch-none outline-none">
         <ModelErrorBoundary fallback={<div className="flex flex-col items-center justify-center h-full text-slate-400 font-bold bg-white/50 rounded-3xl border-2 border-dashed border-slate-200">⚠️ Lỗi nạp mô hình</div>}>
-          <Canvas shadows dpr={[1, 2]} camera={{ fov: 45, position: [0, 1, 6] }}>
+          <Canvas 
+            shadows 
+            dpr={[1, 2]} 
+            camera={{ fov: 45, position: [0, 1, 6] }}
+            gl={{ preserveDrawingBuffer: true }} // Quan trọng: Cho phép chụp ảnh canvas
+          >
+            <ScreenshotHandler captureRef={screenshotRef} />
             <Suspense fallback={null}>
-              {/* Sử dụng Center không tham số để căn giữa tâm hình học vào (0,0,0) -> Luôn nằm giữa màn hình */}
               <Center>
                 <Resize scale={4}>
                   <Model 
@@ -122,7 +160,6 @@ const Toy3D: React.FC<Toy3DProps> = ({ item }) => {
                 </Resize>
               </Center>
               
-              {/* Đặt bóng đổ thấp xuống một chút để tạo không gian (khoảng -2.2 cho scale 4) */}
               <ContactShadows position={[0, -2.2, 0]} opacity={0.4} scale={10} blur={2.5} far={4} color="#000000" />
               
               <Environment preset="city" />
@@ -142,11 +179,9 @@ const Toy3D: React.FC<Toy3DProps> = ({ item }) => {
                 makeDefault 
                 enableZoom={true} 
                 enablePan={true} 
-                // screenSpacePanning=true: Kéo như kéo ảnh (lên/xuống/trái/phải) thay vì kéo theo mặt phẳng camera
                 screenSpacePanning={true}
                 minDistance={2} 
                 maxDistance={20}
-                // Target [0,0,0] để camera luôn xoay quanh tâm mô hình
                 target={[0, 0, 0]}
             />
           </Canvas>

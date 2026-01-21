@@ -11,6 +11,7 @@ export interface DiscoveryItem {
   id: string;
   name: string;
   icon: string; // Emoji fallback
+  thumbnail?: string; // NEW: Base64 image of the model screenshot
   imageUrl?: string; // URL for 2.5D image effect
   modelUrl?: string; // URL for real .glb 3D model
   textures?: TextureMaps; // CHANGED: Now holds an object of texture URLs

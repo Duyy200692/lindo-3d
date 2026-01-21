@@ -4,7 +4,7 @@ import Toy3D from './components/Toy3D';
 import { fetchFunFact } from './services/geminiService';
 import { saveModelToLibrary, loadLibrary, deleteFromLibrary } from './utils/storage';
 import { db } from './firebaseConfig';
-import { Sparkles, ArrowLeft, Volume2, Rotate3d, Info, Upload, ArrowRight, Wand2, Save, Library, Trash2, Image as ImageIcon, Layers, Check, Zap, RefreshCw, Lightbulb, Wifi, WifiOff, Loader2, Eye, EyeOff } from 'lucide-react';
+import { Sparkles, ArrowLeft, Volume2, Rotate3d, Info, Upload, ArrowRight, Wand2, Save, Library, Trash2, Image as ImageIcon, Layers, Check, Zap, RefreshCw, Lightbulb, Wifi, WifiOff, Loader2, Eye, EyeOff, HardDrive } from 'lucide-react';
 
 export default function App() {
   const [mode, setMode] = useState<AppMode>(AppMode.GALLERY);
@@ -13,7 +13,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [speaking, setSpeaking] = useState(false);
   const [savedItems, setSavedItems] = useState<{ item: DiscoveryItem, factData: FunFactData }[]>([]);
-  const [isOnline, setIsOnline] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
   const [isAppReady, setIsAppReady] = useState(false);
   
   // State for visibility toggle
@@ -32,10 +32,16 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textureInputRef = useRef<HTMLInputElement>(null);
   const multiTextureInputRef = useRef<HTMLInputElement>(null);
+  
+  // Ref để gọi chức năng chụp ảnh từ Toy3D
+  const screenshotRef = useRef<() => string | null>(() => null);
 
   useEffect(() => {
     const initApp = async () => {
-      setIsOnline(!!db);
+      setIsOnline(navigator.onLine);
+      window.addEventListener('online', () => setIsOnline(true));
+      window.addEventListener('offline', () => setIsOnline(false));
+
       await loadSavedLibrary();
       setIsAppReady(true);
     };
@@ -43,6 +49,8 @@ export default function App() {
     initApp();
 
     return () => {
+      window.removeEventListener('online', () => setIsOnline(true));
+      window.removeEventListener('offline', () => setIsOnline(false));
       window.speechSynthesis.cancel();
     };
   }, []);
@@ -53,7 +61,6 @@ export default function App() {
       setSavedItems(library);
     } catch (e) {
       console.error("Failed to load library", e);
-      setSavedItems([]);
     }
   };
 
@@ -234,13 +241,25 @@ export default function App() {
   const handleSaveToLibrary = async () => {
     if (!selectedItem || !factData || !selectedItem.modelUrl) return;
     setIsSaving(true);
+    
+    // 1. Chụp ảnh màn hình làm thumbnail
+    let thumbnailData = undefined;
+    if (screenshotRef.current) {
+        const captured = screenshotRef.current();
+        if (captured) {
+            thumbnailData = captured;
+        }
+    }
+
+    // 2. Cập nhật item với thumbnail mới
+    const itemToSave = { ...selectedItem, thumbnail: thumbnailData };
+
     try {
-      await saveModelToLibrary(selectedItem, factData, selectedItem.modelUrl, selectedItem.textures, selectedItem.resources);
-      alert("Đã lưu vào bộ sưu tập!");
+      await saveModelToLibrary(itemToSave, factData, itemToSave.modelUrl!, itemToSave.textures, itemToSave.resources);
+      alert("Đã lưu thành công!");
       setIsSaving(false);
-      loadSavedLibrary();
     } catch (e) {
-      alert("Không lưu được, bộ nhớ đầy hoặc mất kết nối!");
+      alert("Có lỗi khi lưu, nhưng đừng lo, bé thử lại sau nhé!");
       setIsSaving(false);
     }
   };
@@ -329,9 +348,13 @@ export default function App() {
             </div>
             <h1 className="text-2xl font-bold text-slate-700 tracking-tight">Kiddo<span className="text-indigo-500">Builder</span></h1>
             </div>
-            <div className="flex items-center gap-2 bg-white/60 px-3 py-1.5 rounded-full backdrop-blur-sm border border-slate-100">
+            <div className="flex items-center gap-2 bg-white/60 px-3 py-1.5 rounded-full backdrop-blur-sm border border-slate-100 shadow-sm">
             {isOnline ? (
-                <><Wifi className="w-4 h-4 text-green-500" /><span className="text-xs font-bold text-green-600">Online</span></>
+                db ? (
+                     <><Wifi className="w-4 h-4 text-green-500" /><span className="text-xs font-bold text-green-600">Cloud Sync</span></>
+                ) : (
+                     <><HardDrive className="w-4 h-4 text-orange-500" /><span className="text-xs font-bold text-orange-600">Thiết bị</span></>
+                )
             ) : (
                 <><WifiOff className="w-4 h-4 text-slate-400" /><span className="text-xs font-bold text-slate-500">Offline</span></>
             )}
@@ -372,13 +395,23 @@ export default function App() {
                   </div>
                 ) : (
                   savedItems.map((record) => (
-                    <div key={record.item.id} onClick={() => handleOpenLibraryItem(record)} className="bg-white p-3 rounded-2xl shadow-sm border border-slate-100 flex items-center gap-3 hover:bg-slate-50 active:scale-[0.98] transition-all relative group">
-                      <div className="w-14 h-14 bg-indigo-50 rounded-xl flex items-center justify-center text-2xl overflow-hidden shrink-0">
-                        {record.item.icon}
+                    <div key={record.item.id} onClick={() => handleOpenLibraryItem(record)} className="bg-white p-3 rounded-2xl shadow-sm border border-slate-100 flex items-center gap-3 hover:bg-slate-50 active:scale-[0.98] transition-all relative group h-20">
+                      <div className="w-14 h-14 bg-indigo-50 rounded-xl flex items-center justify-center overflow-hidden shrink-0 border border-slate-100">
+                        {record.item.thumbnail ? (
+                            <img src={record.item.thumbnail} alt={record.item.name} className="w-full h-full object-cover" />
+                        ) : (
+                            <span className="text-2xl">{record.item.icon}</span>
+                        )}
                       </div>
                       <div className="flex-1 min-w-0">
                          <h4 className="font-bold text-slate-800 text-base truncate">{record.factData.name}</h4>
-                         <p className="text-xs text-slate-400 truncate">Đã lưu bộ sưu tập</p>
+                         <p className="text-xs text-slate-400 truncate flex items-center gap-1">
+                            {record.item.id.startsWith('temp') || !record.item.modelUrl?.startsWith('http') ? (
+                                <><HardDrive className="w-3 h-3 text-orange-400" /> Trên máy</>
+                            ) : (
+                                <><Wifi className="w-3 h-3 text-green-400" /> Cloud</>
+                            )}
+                         </p>
                       </div>
                       <button onClick={(e) => handleDeleteItem(e, record.item.id)} className="p-2 bg-red-50 text-red-400 rounded-full opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-100 hover:text-red-500">
                         <Trash2 className="w-4 h-4" />
@@ -440,7 +473,7 @@ export default function App() {
           <div className="relative w-full h-full overflow-hidden">
             {/* 3D VIEWPORT - Nằm làm nền */}
             <div className="absolute inset-0 z-0 bg-slate-100">
-               <Toy3D item={selectedItem} />
+               <Toy3D item={selectedItem} screenshotRef={screenshotRef} />
             </div>
 
             {/* CONTROL BUTTONS - Luôn nổi phía trên */}
