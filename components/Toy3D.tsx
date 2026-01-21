@@ -1,12 +1,26 @@
-import React, { useRef, useState, useEffect, Suspense, ReactNode } from 'react';
+import React, { Component, useRef, useState, useEffect, Suspense, ReactNode } from 'react';
 import { DiscoveryItem, TextureMaps } from '../types';
 import { Canvas } from '@react-three/fiber';
-import { useGLTF, OrbitControls, useAnimations, Environment, Center, Bounds } from '@react-three/drei';
+import { useGLTF, OrbitControls, useAnimations, Environment, Center, Bounds, Html, useProgress } from '@react-three/drei';
 import * as THREE from 'three';
+import { Loader2 } from 'lucide-react';
 
 interface Toy3DProps {
   item: DiscoveryItem;
 }
+
+// Component hiển thị khi đang tải mô hình 3D
+const Loader = () => {
+  const { progress } = useProgress();
+  return (
+    <Html center>
+      <div className="flex flex-col items-center justify-center bg-white/80 backdrop-blur-sm p-4 rounded-2xl shadow-lg border border-white">
+        <Loader2 className="w-8 h-8 text-indigo-500 animate-spin mb-2" />
+        <p className="text-xs font-bold text-slate-600 whitespace-nowrap">Đang mở hộp... {progress.toFixed(0)}%</p>
+      </div>
+    </Html>
+  );
+};
 
 const Model = ({ url, textures, resources, textureFlipY = false }: { url: string, textures?: TextureMaps, resources?: {[key: string]: string}, textureFlipY?: boolean }) => {
   const group = useRef<THREE.Group>(null);
@@ -32,7 +46,11 @@ const Model = ({ url, textures, resources, textureFlipY = false }: { url: string
     // 1. Chạy hoạt hình
     if (actions) {
       Object.values(actions).forEach((action: any) => {
-        action?.reset().fadeIn(0.5).play();
+        try {
+            action?.reset().fadeIn(0.5).play();
+        } catch (e) {
+            console.warn("Animation play error", e);
+        }
       });
     }
 
@@ -60,49 +78,51 @@ const Model = ({ url, textures, resources, textureFlipY = false }: { url: string
       }));
 
       // Duyệt qua mô hình để "dán" ảnh lên
-      scene.traverse((child) => {
-        if ((child as THREE.Mesh).isMesh) {
-          const mesh = child as THREE.Mesh;
-          // Một số mô hình có nhiều vật liệu trên một mesh
-          const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-          
-          materials.forEach((mat: any) => {
-            if (mat.isMeshStandardMaterial) {
-              // Dán Màu da
-              if (loadedMaps.map) {
-                mat.map = loadedMaps.map;
-                mat.color.setHex(0xffffff); // Xóa màu gốc để hiện ảnh rõ nhất
-              }
-              // Dán Độ sần (Normal)
-              if (loadedMaps.normalMap) {
-                mat.normalMap = loadedMaps.normalMap;
-                mat.normalScale.set(1, 1);
-              }
-              // Dán Độ bóng (Roughness)
-              if (loadedMaps.roughnessMap) {
-                mat.roughnessMap = loadedMaps.roughnessMap;
-                mat.roughness = 1;
-              }
-              // Dán Kim loại (Metallic)
-              if (loadedMaps.metalnessMap) {
-                mat.metalnessMap = loadedMaps.metalnessMap;
-                mat.metalness = 1;
-              }
-              // Dán Đổ bóng (AO)
-              if (loadedMaps.aoMap) {
-                mat.aoMap = loadedMaps.aoMap;
-              }
-              // Dán Phát sáng (Emissive)
-              if (loadedMaps.emissiveMap) {
-                mat.emissiveMap = loadedMaps.emissiveMap;
-                mat.emissive.setHex(0xffffff);
-              }
+      if (scene) {
+          scene.traverse((child) => {
+            if ((child as THREE.Mesh).isMesh) {
+              const mesh = child as THREE.Mesh;
+              // Một số mô hình có nhiều vật liệu trên một mesh
+              const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+              
+              materials.forEach((mat: any) => {
+                if (mat.isMeshStandardMaterial) {
+                  // Dán Màu da
+                  if (loadedMaps.map) {
+                    mat.map = loadedMaps.map;
+                    mat.color.setHex(0xffffff); // Xóa màu gốc để hiện ảnh rõ nhất
+                  }
+                  // Dán Độ sần (Normal)
+                  if (loadedMaps.normalMap) {
+                    mat.normalMap = loadedMaps.normalMap;
+                    mat.normalScale.set(1, 1);
+                  }
+                  // Dán Độ bóng (Roughness)
+                  if (loadedMaps.roughnessMap) {
+                    mat.roughnessMap = loadedMaps.roughnessMap;
+                    mat.roughness = 1;
+                  }
+                  // Dán Kim loại (Metallic)
+                  if (loadedMaps.metalnessMap) {
+                    mat.metalnessMap = loadedMaps.metalnessMap;
+                    mat.metalness = 1;
+                  }
+                  // Dán Đổ bóng (AO)
+                  if (loadedMaps.aoMap) {
+                    mat.aoMap = loadedMaps.aoMap;
+                  }
+                  // Dán Phát sáng (Emissive)
+                  if (loadedMaps.emissiveMap) {
+                    mat.emissiveMap = loadedMaps.emissiveMap;
+                    mat.emissive.setHex(0xffffff);
+                  }
 
-              mat.needsUpdate = true;
+                  mat.needsUpdate = true;
+                }
+              });
             }
           });
-        }
-      });
+      }
     };
 
     applyTextures();
@@ -126,11 +146,15 @@ interface ModelErrorBoundaryState {
   hasError: boolean;
 }
 
-class ModelErrorBoundary extends React.Component<ModelErrorBoundaryProps, ModelErrorBoundaryState> {
+class ModelErrorBoundary extends Component<ModelErrorBoundaryProps, ModelErrorBoundaryState> {
   public state: ModelErrorBoundaryState = { hasError: false };
 
   static getDerivedStateFromError() { return { hasError: true }; }
   
+  componentDidCatch(error: any) {
+      console.error("Model 3D Render Error:", error);
+  }
+
   render() { return this.state.hasError ? this.props.fallback : this.props.children; }
 }
 
@@ -145,7 +169,8 @@ const Toy3D: React.FC<Toy3DProps> = ({ item }) => {
       <div className="w-full h-[90vh] absolute top-0 left-0 z-30 touch-none outline-none pointer-events-auto">
         <ModelErrorBoundary fallback={<div className="flex flex-col items-center justify-center h-full text-slate-400 font-bold bg-white/50 rounded-3xl border-2 border-dashed border-slate-200 mt-20">⚠️ Lỗi nạp mô hình</div>}>
           <Canvas shadows dpr={[1, 2]} camera={{ fov: 45, position: [0, 1, 6] }}>
-            <Suspense fallback={null}>
+            {/* Thêm fallback Loader vào Suspense để tránh màn hình trắng khi đang tải */}
+            <Suspense fallback={<Loader />}>
               {/* margin={0.65} : Giảm margin để mô hình TO HƠN, chiếm nhiều không gian hơn */}
               <Bounds fit observe margin={0.65}>
                   <Center top>

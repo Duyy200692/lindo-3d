@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { Component, useState, useEffect, useRef } from 'react';
 import { DiscoveryItem, AppMode, FunFactData, TextureMaps } from './types';
 import Toy3D from './components/Toy3D';
 import { fetchFunFact } from './services/geminiService';
@@ -16,7 +16,7 @@ interface GlobalErrorBoundaryState {
 }
 
 // Error Boundary để bắt lỗi màn hình trắng
-class GlobalErrorBoundary extends React.Component<GlobalErrorBoundaryProps, GlobalErrorBoundaryState> {
+class GlobalErrorBoundary extends Component<GlobalErrorBoundaryProps, GlobalErrorBoundaryState> {
   public state: GlobalErrorBoundaryState = { hasError: false, error: null };
 
   static getDerivedStateFromError(error: any) {
