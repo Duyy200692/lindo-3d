@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect, Suspense, ReactNode } from 'react';
+import React, { Component, useRef, useState, useEffect, Suspense, ReactNode } from 'react';
 import { DiscoveryItem, TextureMaps } from '../types';
 import { Canvas, useThree } from '@react-three/fiber';
 import { useGLTF, OrbitControls, useAnimations, Environment, Center, ContactShadows, Resize } from '@react-three/drei';
@@ -36,11 +36,14 @@ const Model = ({ url, textures, resources, textureFlipY = false }: { url: string
   const group = useRef<THREE.Group>(null);
   
   // Tải mô hình
-  const { scene, animations } = useGLTF(url, undefined, undefined, (loader: any) => {
+  // QUAN TRỌNG: Tham số thứ 2 là 'true' để bật Draco Compression (rất cần thiết cho file GLB nén)
+  const { scene, animations } = useGLTF(url, true, undefined, (loader: any) => {
     // Luôn set CrossOrigin để tránh lỗi CORS với hình ảnh từ Firebase/Blob
-    loader.crossOrigin = 'anonymous';
+    loader.setCrossOrigin('anonymous');
 
-    if (resources) {
+    // CHỈ can thiệp vào Manager khi thực sự có resources (file bin/texture rời)
+    // Nếu resources rỗng (trường hợp file .glb đơn lẻ từ Cloud), ta dùng manager mặc định để tránh lỗi
+    if (resources && Object.keys(resources).length > 0) {
         loader.manager = new THREE.LoadingManager();
         loader.manager.setURLModifier((url: string) => {
             // 1. Decode URL để xử lý %20 (khoảng trắng) và các ký tự đặc biệt
@@ -123,9 +126,11 @@ const Model = ({ url, textures, resources, textureFlipY = false }: { url: string
 interface ModelErrorBoundaryProps { fallback: ReactNode; children?: ReactNode; }
 interface ModelErrorBoundaryState { hasError: boolean; }
 
-class ModelErrorBoundary extends React.Component<ModelErrorBoundaryProps, ModelErrorBoundaryState> {
-  // Use property initializer instead of constructor to satisfy strict property initialization and type checking
-  state: ModelErrorBoundaryState = { hasError: false };
+class ModelErrorBoundary extends Component<ModelErrorBoundaryProps, ModelErrorBoundaryState> {
+  constructor(props: ModelErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false };
+  }
 
   static getDerivedStateFromError() { return { hasError: true }; }
   
@@ -145,7 +150,17 @@ const Toy3D: React.FC<Toy3DProps> = ({ item, screenshotRef }) => {
   if (item.modelUrl) {
     return (
       <div className="absolute inset-0 w-full h-full z-0 touch-none outline-none">
-        <ModelErrorBoundary fallback={<div className="flex flex-col items-center justify-center h-full text-slate-400 font-bold bg-white/50 rounded-3xl border-2 border-dashed border-slate-200">⚠️ Lỗi nạp mô hình</div>}>
+        <ModelErrorBoundary fallback={
+            <div className="flex flex-col items-center justify-center h-full text-center px-4">
+                <div className="bg-white/80 backdrop-blur-sm p-6 rounded-3xl border-2 border-red-100 shadow-sm">
+                    <span className="text-4xl block mb-2">🤕</span>
+                    <span className="text-red-500 font-bold block mb-1">Ối! Lỗi tải mô hình rồi</span>
+                    <span className="text-xs text-slate-400 block max-w-[200px] mx-auto">
+                        Có thể do mạng yếu hoặc file bị lỗi. Bé thử chọn mô hình khác xem sao nhé!
+                    </span>
+                </div>
+            </div>
+        }>
           <Canvas 
             shadows 
             dpr={[1, 2]} 
