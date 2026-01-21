@@ -4,36 +4,6 @@ import { Canvas } from '@react-three/fiber';
 import { useGLTF, OrbitControls, useAnimations, Environment, Center, Bounds } from '@react-three/drei';
 import * as THREE from 'three';
 
-// Khai báo JSX Elements cho Three.js để tránh lỗi Property does not exist on type 'JSX.IntrinsicElements'
-// Chúng ta mở rộng interface IntrinsicElements từ ThreeElements của @react-three/fiber
-declare global {
-  namespace JSX {
-    interface IntrinsicElements {
-        // Fallback for standard HTML elements that were lost
-        div: React.DetailedHTMLProps<React.HTMLAttributes<HTMLDivElement>, HTMLDivElement>;
-        span: React.DetailedHTMLProps<React.HTMLAttributes<HTMLSpanElement>, HTMLSpanElement>;
-        button: React.DetailedHTMLProps<React.ButtonHTMLAttributes<HTMLButtonElement>, HTMLButtonElement>;
-        input: React.DetailedHTMLProps<React.InputHTMLAttributes<HTMLInputElement>, HTMLInputElement>;
-        h1: React.DetailedHTMLProps<React.HTMLAttributes<HTMLHeadingElement>, HTMLHeadingElement>;
-        h2: React.DetailedHTMLProps<React.HTMLAttributes<HTMLHeadingElement>, HTMLHeadingElement>;
-        h3: React.DetailedHTMLProps<React.HTMLAttributes<HTMLHeadingElement>, HTMLHeadingElement>;
-        h4: React.DetailedHTMLProps<React.HTMLAttributes<HTMLHeadingElement>, HTMLHeadingElement>;
-        p: React.DetailedHTMLProps<React.HTMLAttributes<HTMLParagraphElement>, HTMLParagraphElement>;
-        img: React.DetailedHTMLProps<React.ImgHTMLAttributes<HTMLImageElement>, HTMLImageElement>;
-        header: React.DetailedHTMLProps<React.HTMLAttributes<HTMLElement>, HTMLElement>;
-        main: React.DetailedHTMLProps<React.HTMLAttributes<HTMLElement>, HTMLElement>;
-        label: React.DetailedHTMLProps<React.LabelHTMLAttributes<HTMLLabelElement>, HTMLLabelElement>;
-        // Add more as needed if errors persist, but removing the global declaration entirely is usually better. 
-        // However, if we must keep it for R3F, we need to merge.
-        // Given the errors, the safest fix is to REMOVE the declaration entirely and rely on local ignores or correct setup.
-        // But since I'm editing the file content, I will remove the block completely as it's the root cause.
-    }
-  }
-}
-
-// Removing the declare global block entirely as it conflicts with React's own JSX definitions.
-// The R3F elements are handled via @ts-ignore in this file.
-
 interface Toy3DProps {
   item: DiscoveryItem;
 }
@@ -139,24 +109,31 @@ const Model = ({ url, textures, resources, textureFlipY = false }: { url: string
   }, [actions, scene, textures, textureFlipY]);
   
   return (
-    // @ts-ignore - Bỏ qua lỗi Property 'group' does not exist on type 'JSX.IntrinsicElements'
+    // @ts-ignore
     <group ref={group} dispose={null}>
-      {/* @ts-ignore - Bỏ qua lỗi Property 'primitive' does not exist on type 'JSX.IntrinsicElements' */}
+      {/* @ts-ignore */}
       <primitive object={scene} />
     </group>
   );
 };
 
-class ModelErrorBoundary extends Component<{fallback: ReactNode, children?: ReactNode}, {hasError: boolean}> {
-  state = { hasError: false };
+class ModelErrorBoundary extends React.Component<{fallback: ReactNode, children?: ReactNode}, {hasError: boolean}> {
+  constructor(props: {fallback: ReactNode, children?: ReactNode}) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
   static getDerivedStateFromError() { return { hasError: true }; }
+  
   render() { return this.state.hasError ? this.props.fallback : this.props.children; }
 }
 
 const Toy3D: React.FC<Toy3DProps> = ({ item }) => {
   if (item.modelUrl) {
     return (
-      <div className="w-full h-[400px] relative z-10 rounded-3xl overflow-hidden bg-gradient-to-b from-white/0 to-white/20">
+      // Thêm 'touch-none' để ngăn trình duyệt xử lý sự kiện chạm (ngăn zoom trang)
+      // Thêm 'outline-none' để bỏ viền khi focus
+      <div className="w-full h-[400px] relative z-10 rounded-3xl overflow-hidden bg-gradient-to-b from-white/0 to-white/20 touch-none outline-none">
         <ModelErrorBoundary fallback={<div className="flex flex-col items-center justify-center h-full text-slate-400 font-bold bg-white/50 rounded-3xl border-2 border-dashed border-slate-200">⚠️ Lỗi nạp mô hình</div>}>
           <Canvas shadows dpr={[1, 2]} camera={{ fov: 45, position: [0, 2, 8] }}>
             <Suspense fallback={null}>
@@ -171,14 +148,15 @@ const Toy3D: React.FC<Toy3DProps> = ({ item }) => {
                   </Center>
               </Bounds>
               <Environment preset="city" />
-              {/* @ts-ignore - ambientLight element error fix */}
+              {/* @ts-ignore */}
               <ambientLight intensity={0.8} />
-              {/* @ts-ignore - directionalLight element error fix */}
+              {/* @ts-ignore */}
               <directionalLight position={[5, 10, 5]} intensity={1.2} castShadow />
-              {/* @ts-ignore - spotLight element error fix */}
+              {/* @ts-ignore */}
               <spotLight position={[-5, 5, 5]} intensity={0.5} angle={0.3} />
             </Suspense>
-            <OrbitControls autoRotate autoRotateSpeed={0.5} makeDefault />
+            {/* enableZoom={true} là mặc định, nhưng explicit để rõ ràng */}
+            <OrbitControls autoRotate autoRotateSpeed={0.5} makeDefault enableZoom={true} enablePan={true} />
           </Canvas>
           <div className="absolute bottom-4 right-4 bg-white/40 backdrop-blur-sm px-3 py-1 rounded-full text-[10px] font-bold text-slate-500 pointer-events-none border border-white/50">
             Dùng 2 ngón tay để xoay & phóng to

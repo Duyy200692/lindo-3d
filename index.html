@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="vi">
   <head>
@@ -27,6 +28,13 @@
         font-family: 'Fredoka', sans-serif;
         background-color: #f0f9ff;
         overflow: hidden;
+        /* Ngăn hành vi kéo trang (bounce) trên mobile */
+        overscroll-behavior: none;
+        /* Tối ưu hóa phản hồi chạm */
+        touch-action: pan-x pan-y; 
+        /* Ngăn chọn văn bản khi nhấn giữ */
+        -webkit-user-select: none;
+        user-select: none;
       }
       .no-scrollbar::-webkit-scrollbar {
         display: none;
@@ -65,7 +73,7 @@
   <body>
     <div id="root">
       <div style="display:flex; flex-direction:column; justify-content:center; align-items:center; height:100vh; font-family:sans-serif; background:#f0f9ff; text-align:center; padding:20px;">
-        <div style="background:white; padding:30px; border-radius:30px; shadow:0 10px 25px -5px rgba(0,0,0,0.1);">
+        <div style="background:white; padding:30px; border-radius:30px; box-shadow:0 10px 25px -5px rgba(0,0,0,0.1);">
           <h2 style="color:#6366f1; margin-bottom:15px; font-size:20px; font-weight:bold;">Đang chuẩn bị thế giới 3D...</h2>
           <div style="width:50px; height:50px; border:5px solid #e2e8f0; border-top-color:#6366f1; border-radius:50%; margin: 0 auto;" class="animate-spin-fast"></div>
           <p style="color:#94a3b8; font-size:14px; margin-top:15px;">Lần đầu tải có thể mất vài giây bé nhé!</p>
