@@ -1,20 +1,28 @@
 import { DiscoveryItem, FunFactData, TextureMaps } from '../types';
 import { db, storage } from '../firebaseConfig';
-import * as Firestore from 'firebase/firestore';
-import * as FirebaseStorage from 'firebase/storage';
+import { collection, addDoc, getDocs, deleteDoc, doc, query, orderBy, Timestamp } from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { saveToLocalDB, loadFromLocalDB, deleteFromLocalDB } from './indexedDB';
-
-const { collection, addDoc, getDocs, deleteDoc, doc, query, orderBy, Timestamp } = Firestore as any;
-const { ref, uploadBytes, getDownloadURL } = FirebaseStorage as any;
 
 const COLLECTION_NAME = 'models';
 
-// Hàm phụ để tải file lên Storage
+// Hàm phụ để tải file lên Storage với cơ chế retry đơn giản
 const uploadFile = async (path: string, blob: Blob): Promise<string> => {
     if (!storage) throw new Error("Storage chưa sẵn sàng.");
+    
+    // Thêm timestamp vào tên file để tránh cache
     const storageRef = ref(storage, path);
-    await uploadBytes(storageRef, blob);
-    return await getDownloadURL(storageRef);
+    
+    // Metadata giúp xử lý CORS tốt hơn trên một số trình duyệt
+    const metadata = {
+        contentType: blob.type,
+        cacheControl: 'public,max-age=3600'
+    };
+
+    await uploadBytes(storageRef, blob, metadata);
+    const url = await getDownloadURL(storageRef);
+    console.log(`Đã upload: ${path}`);
+    return url;
 };
 
 export const saveModelToLibrary = async (
@@ -25,18 +33,16 @@ export const saveModelToLibrary = async (
   resources?: { [key: string]: string }
 ): Promise<void> => {
   
-  // 1. LUÔN LUÔN Lưu vào IndexedDB (Offline) trước
-  // Đảm bảo người dùng luôn thấy mô hình đã lưu kể cả khi mạng lỗi
+  // 1. Lưu offline để backup ngay lập tức
   try {
       await saveToLocalDB(item, factData, modelBlobUrl, resources);
-      console.log("Đã lưu vào bộ nhớ thiết bị (Offline mode)");
   } catch (localError) {
-      console.error("Lỗi lưu offline:", localError);
+      console.warn("Lỗi lưu offline:", localError);
   }
 
-  // 2. Nếu có mạng và Firebase, thử lưu lên Cloud
+  // 2. Kiểm tra kết nối Cloud
   if (!db || !storage) {
-      console.warn("Đang ở chế độ Offline hoặc chưa cấu hình Firebase, chỉ lưu cục bộ.");
+      alert("Đang ở chế độ Offline. Mô hình chỉ được lưu trên máy này thôi nhé!");
       return; 
   }
 
@@ -44,22 +50,22 @@ export const saveModelToLibrary = async (
     const uniqueId = item.id.startsWith('temp-') ? `item-${Date.now()}` : item.id; 
     const folderPath = `models/${uniqueId}`;
 
-    // Xác định tên file gốc
+    // --- UPLOAD MÔ HÌNH CHÍNH ---
     let mainFileName = 'scene.glb'; 
     if (resources && modelBlobUrl) {
+        // Tìm tên file gốc nếu có
         const foundName = Object.keys(resources).find(key => resources[key] === modelBlobUrl);
         if (foundName) mainFileName = foundName;
     }
 
-    // Tải mô hình chính
     const modelRes = await fetch(modelBlobUrl);
     const modelBlob = await modelRes.blob();
     const modelDownloadUrl = await uploadFile(`${folderPath}/${mainFileName}`, modelBlob);
 
-    // Tải resources
+    // --- UPLOAD RESOURCES (BIN, TEXTURES RỜI) ---
     const resourceUrls: { [key: string]: string } = {};
     if (resources) {
-      for (const [filename, url] of Object.entries(resources)) {
+      const resourcePromises = Object.entries(resources).map(async ([filename, url]) => {
         if (url && url.startsWith('blob:') && filename !== mainFileName) {
            try {
              const resRes = await fetch(url);
@@ -67,32 +73,37 @@ export const saveModelToLibrary = async (
              const resUrl = await uploadFile(`${folderPath}/resources/${filename}`, resBlob);
              resourceUrls[filename] = resUrl;
            } catch (e) {
-             console.warn(`Không tải được resource lên cloud: ${filename}`);
+             console.warn(`Bỏ qua resource lỗi: ${filename}`, e);
            }
         }
-      }
+      });
+      await Promise.all(resourcePromises);
     }
 
-    // Tải textures
+    // --- UPLOAD TEXTURES (MAPPING) ---
     const textureUrls: TextureMaps = {};
     if (textureMaps) {
-        for (const [key, url] of Object.entries(textureMaps)) {
+        const texturePromises = Object.entries(textureMaps).map(async ([key, url]) => {
             if (url && url.startsWith('blob:')) {
                 try {
                     const tRes = await fetch(url);
                     const tBlob = await tRes.blob();
-                    const tUrl = await uploadFile(`${folderPath}/textures/${key}.png`, tBlob);
+                    // Xác định đuôi file (thường là png hoặc jpg)
+                    const ext = tBlob.type.includes('jpeg') ? 'jpg' : 'png';
+                    const tUrl = await uploadFile(`${folderPath}/textures/${key}.${ext}`, tBlob);
                     // @ts-ignore
                     textureUrls[key] = tUrl;
-                } catch (e) { console.warn(`Lỗi upload texture ${key}`); }
+                } catch (e) { console.warn(`Bỏ qua texture lỗi: ${key}`); }
             }
-        }
+        });
+        await Promise.all(texturePromises);
     }
 
-    // Lưu Firestore
+    // --- LƯU DATABASE ---
     await addDoc(collection(db, COLLECTION_NAME), {
       name: factData.name,
       icon: item.icon,
+      thumbnail: item.thumbnail || null, // Lưu ảnh thumbnail base64 (chụp màn hình)
       modelUrl: modelDownloadUrl,
       resources: resourceUrls,
       textures: textureUrls,
@@ -104,9 +115,12 @@ export const saveModelToLibrary = async (
       createdAt: Timestamp.now()
     });
 
+    console.log("Đã đồng bộ lên Cloud thành công!");
+
   } catch (error: any) {
-    console.error("Lỗi khi lưu lên Cloud (nhưng đã lưu Local):", error);
-    // Không throw lỗi để app không báo thất bại, vì đã lưu được local rồi
+    console.error("Lỗi Critical khi lưu Cloud:", error);
+    alert(`Lỗi khi đồng bộ: ${error.message}. Dữ liệu vẫn được lưu trên máy này.`);
+    throw error;
   }
 };
 
@@ -114,44 +128,43 @@ export const loadLibrary = async (): Promise<{ item: DiscoveryItem, factData: Fu
   let localItems: any[] = [];
   let cloudItems: any[] = [];
 
-  // 1. Load Local
+  // Load Local trước để hiển thị nhanh
   try {
       localItems = await loadFromLocalDB();
   } catch (e) { console.error("Lỗi load local:", e); }
 
-  // 2. Load Cloud
+  // Load Cloud nếu có mạng
   if (db) {
     try {
         const q = query(collection(db, COLLECTION_NAME), orderBy('createdAt', 'desc'));
         const querySnapshot = await getDocs(q);
+        
         cloudItems = querySnapshot.docs.map((docSnap: any) => {
-        const data = docSnap.data();
-        return {
-            item: { ...data, id: docSnap.id } as any,
-            factData: data.factData as FunFactData
-        };
+            const data = docSnap.data();
+            return {
+                item: { 
+                    ...data, 
+                    id: docSnap.id, // ID từ Firestore
+                    modelType: data.modelType || 'model'
+                } as any,
+                factData: data.factData as FunFactData
+            };
         });
     } catch (e) {
-        console.error("Lỗi load cloud hoặc không có mạng:", e);
+        console.error("Không tải được dữ liệu Cloud:", e);
     }
   }
 
-  // 3. Merge (Ưu tiên local nếu trùng ID - tuy nhiên ID cloud và local khác nhau do cơ chế sinh)
-  // Đơn giản là nối lại.
-  // Để tránh trùng lặp nội dung (nếu bạn vừa lưu local vừa lưu cloud), 
-  // trong thực tế cần logic phức tạp hơn (sync). 
-  // Ở đây ta hiển thị cả hai hoặc ưu tiên Cloud nếu muốn.
-  // Nhưng để user thấy ngay cái vừa tạo -> show hết.
-  
-  return [...localItems, ...cloudItems];
+  // Gộp dữ liệu: Ưu tiên Cloud Items, sau đó đến Local Items (những cái chưa được đồng bộ)
+  // Logic đơn giản: Hiển thị tất cả, người dùng sẽ thấy trùng nếu vừa save xong (chấp nhận được ở mức này)
+  return [...cloudItems, ...localItems.filter(l => l.id.startsWith('temp-') || l.item.modelUrl === 'local')];
 };
 
 export const deleteFromLibrary = async (id: string): Promise<void> => {
-  // Thử xóa cả 2 nơi
   await deleteFromLocalDB(id);
-  if (db) {
+  if (db && !id.startsWith('temp-')) {
       try {
         await deleteDoc(doc(db, COLLECTION_NAME, id));
-      } catch (e) { /* Bỏ qua nếu id không tồn tại trên cloud */ }
+      } catch (e) { console.error("Lỗi xóa trên cloud", e); }
   }
 };

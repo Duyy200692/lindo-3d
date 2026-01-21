@@ -1,12 +1,6 @@
-
-import * as FirebaseApp from "firebase/app";
-import * as Firestore from "firebase/firestore";
-import * as FirebaseStorage from "firebase/storage";
-
-// Sử dụng các hàm từ namespace để tránh lỗi named exports
-const { initializeApp, getApp, getApps } = FirebaseApp as any;
-const { getFirestore } = Firestore as any;
-const { getStorage } = FirebaseStorage as any;
+import { initializeApp, getApp, getApps, FirebaseApp } from "firebase/app";
+import { getFirestore, Firestore } from "firebase/firestore";
+import { getStorage, FirebaseStorage } from "firebase/storage";
 
 const firebaseConfig = {
   apiKey: "AIzaSyDwqbnonJu8DA7BxRnw57klhBM7iaGPdT0",
@@ -17,24 +11,23 @@ const firebaseConfig = {
   appId: "1:448393169111:web:dcaf613efb242f1e70c892"
 };
 
-// Khởi tạo Firebase App an toàn
-let app: any;
+let app: FirebaseApp;
+let db: Firestore | null = null;
+let storage: FirebaseStorage | null = null;
+
 try {
-  app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
-} catch (e) {
-  console.error("Firebase initialization failed:", e);
-}
+    if (!getApps().length) {
+        app = initializeApp(firebaseConfig);
+    } else {
+        app = getApp();
+    }
 
-let db: any = null;
-let storage: any = null;
-
-if (app) {
-  try {
     db = getFirestore(app);
     storage = getStorage(app);
-  } catch (error) {
-    console.error("Firebase services initialization failed:", error);
-  }
+    
+    console.log("Firebase đã kết nối!");
+} catch (error) {
+    console.error("Lỗi cấu hình Firebase:", error);
 }
 
 export { db, storage, app };
