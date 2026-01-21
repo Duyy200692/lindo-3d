@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect, Suspense, ReactNode, Component } from 'react';
+import React, { useRef, useState, useEffect, Suspense, ReactNode } from 'react';
 import { DiscoveryItem, TextureMaps } from '../types';
 import { Canvas } from '@react-three/fiber';
 import { useGLTF, OrbitControls, useAnimations, Environment, Center, Bounds, ContactShadows, Resize } from '@react-three/drei';
@@ -16,7 +16,10 @@ const Model = ({ url, textures, resources, textureFlipY = false }: { url: string
     if (resources) {
         loader.manager = new THREE.LoadingManager();
         loader.manager.setURLModifier((url: string) => {
-            const fileName = url.replace(/^.*[\\\/]/, ''); 
+            // Lấy tên file bằng cách bỏ hết path phía trước VÀ bỏ cả query params phía sau (ví dụ ?token=...)
+            // Regex: Lấy phần sau dấu / hoặc \ cuối cùng, sau đó bỏ phần từ dấu ? hoặc # trở đi
+            const fileName = url.replace(/^.*[\\\/]/, '').replace(/[\?#].*$/, '');
+            
             if (resources[fileName]) {
                 return resources[fileName];
             }
@@ -87,7 +90,7 @@ const Model = ({ url, textures, resources, textureFlipY = false }: { url: string
 interface ModelErrorBoundaryProps { fallback: ReactNode; children?: ReactNode; }
 interface ModelErrorBoundaryState { hasError: boolean; }
 
-class ModelErrorBoundary extends Component<ModelErrorBoundaryProps, ModelErrorBoundaryState> {
+class ModelErrorBoundary extends React.Component<ModelErrorBoundaryProps, ModelErrorBoundaryState> {
   state: ModelErrorBoundaryState = { hasError: false };
 
   static getDerivedStateFromError() { return { hasError: true }; }

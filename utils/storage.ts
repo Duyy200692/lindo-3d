@@ -1,4 +1,3 @@
-
 import { DiscoveryItem, FunFactData, TextureMaps } from '../types';
 import { db, storage } from '../firebaseConfig';
 import * as Firestore from 'firebase/firestore';
@@ -30,15 +29,28 @@ export const saveModelToLibrary = async (
     const uniqueId = `item-${Date.now()}`; 
     const folderPath = `models/${uniqueId}`;
 
-    // 1. Tải mô hình chính (.glb / .gltf)
+    // 1. Xác định tên file gốc để giữ đúng đuôi file (.glb hoặc .gltf)
+    // Nếu lưu sai đuôi (ví dụ file gltf mà lưu là glb), trình loader sẽ bị crash.
+    let mainFileName = 'scene.glb'; // Tên mặc định
+    if (resources && modelBlobUrl) {
+        // Tìm tên file trong resources khớp với blob url hiện tại
+        const foundName = Object.keys(resources).find(key => resources[key] === modelBlobUrl);
+        if (foundName) {
+            mainFileName = foundName;
+        }
+    }
+
+    // 2. Tải mô hình chính (.glb / .gltf)
     const modelRes = await fetch(modelBlobUrl);
     const modelBlob = await modelRes.blob();
-    const modelDownloadUrl = await uploadFile(`${folderPath}/scene_main.glb`, modelBlob);
+    // Sử dụng mainFileName đã tìm được thay vì cứng nhắc scene_main.glb
+    const modelDownloadUrl = await uploadFile(`${folderPath}/${mainFileName}`, modelBlob);
 
-    // 2. Tải các tài nguyên đi kèm (textures, bin...)
+    // 3. Tải các tài nguyên đi kèm (textures, bin...)
     const resourceUrls: { [key: string]: string } = {};
     if (resources) {
       for (const [filename, url] of Object.entries(resources)) {
+        // Bỏ qua file chính nếu nó đã được xử lý ở trên (tùy chọn, nhưng upload lại vào folder resources cũng không sao)
         if (url && url.startsWith('blob:')) {
            try {
              const resRes = await fetch(url);
@@ -52,7 +64,7 @@ export const saveModelToLibrary = async (
       }
     }
 
-    // 3. Lưu thông tin vào Firestore
+    // 4. Lưu thông tin vào Firestore
     await addDoc(collection(db, COLLECTION_NAME), {
       name: factData.name,
       icon: item.icon,
