@@ -155,11 +155,11 @@ export default function App() {
         } 
         else if (lowerName.includes('norm') || lowerName.includes('nrm')) {
             newTextures.normalMap = objectUrl;
-            detectedList.push("Độ sần (Normal)");
+            detectedList.push("Khối sần (Normal)");
         } 
         else if (lowerName.includes('rough') || lowerName.includes('rgh')) {
             newTextures.roughnessMap = objectUrl;
-            detectedList.push("Độ bóng (Roughness)");
+            detectedList.push("Độ nhám (Roughness)");
             if (lowerName.includes('met') || lowerName.includes('mtl')) {
                 newTextures.metalnessMap = objectUrl;
                 detectedList.push("Kim loại (Metallic)");
@@ -406,8 +406,11 @@ export default function App() {
                      </button>
                      <div className="grid grid-cols-3 gap-2">
                         <TextureButton type="map" label="Màu da" iconClass="text-pink-500" />
-                        <TextureButton type="normalMap" label="Độ sần" iconClass="text-blue-500" />
-                        <TextureButton type="roughnessMap" label="Độ bóng" iconClass="text-slate-500" />
+                        <TextureButton type="normalMap" label="Khối sần" iconClass="text-blue-500" />
+                        <TextureButton type="roughnessMap" label="Độ nhám" iconClass="text-emerald-500" />
+                        <TextureButton type="metalnessMap" label="Kim loại" iconClass="text-slate-600" />
+                        <TextureButton type="aoMap" label="Đổ bóng" iconClass="text-indigo-500" />
+                        <TextureButton type="emissiveMap" label="Phát sáng" iconClass="text-yellow-500" />
                      </div>
                      <div className="mt-4 flex items-center justify-between bg-orange-50 p-3 rounded-xl border border-orange-100">
                          <span className="text-sm font-bold text-orange-700">Lật ngược ảnh?</span>
