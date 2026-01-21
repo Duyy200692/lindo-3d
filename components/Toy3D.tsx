@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect, Suspense, ReactNode } from 'react';
+import React, { useRef, useState, useEffect, Suspense, ReactNode, Component } from 'react';
 import { DiscoveryItem, TextureMaps } from '../types';
 import { Canvas } from '@react-three/fiber';
 import { useGLTF, OrbitControls, useAnimations, Environment, Center, Bounds, ContactShadows, Resize } from '@react-three/drei';
@@ -86,7 +86,8 @@ const Model = ({ url, textures, resources, textureFlipY = false }: { url: string
 
 interface ModelErrorBoundaryProps { fallback: ReactNode; children?: ReactNode; }
 interface ModelErrorBoundaryState { hasError: boolean; }
-class ModelErrorBoundary extends React.Component<ModelErrorBoundaryProps, ModelErrorBoundaryState> {
+
+class ModelErrorBoundary extends Component<ModelErrorBoundaryProps, ModelErrorBoundaryState> {
   state: ModelErrorBoundaryState = { hasError: false };
 
   static getDerivedStateFromError() { return { hasError: true }; }
@@ -104,24 +105,22 @@ const Toy3D: React.FC<Toy3DProps> = ({ item }) => {
     return (
       <div className="absolute inset-0 w-full h-full z-0 touch-none outline-none">
         <ModelErrorBoundary fallback={<div className="flex flex-col items-center justify-center h-full text-slate-400 font-bold bg-white/50 rounded-3xl border-2 border-dashed border-slate-200">⚠️ Lỗi nạp mô hình</div>}>
-          <Canvas shadows dpr={[1, 2]} camera={{ fov: 45, position: [0, 1, 5] }}>
+          <Canvas shadows dpr={[1, 2]} camera={{ fov: 45, position: [0, 1, 6] }}>
             <Suspense fallback={null}>
-              {/* Resize về kích thước chuẩn (khoảng 4 đơn vị) để dễ căn chỉnh camera */}
-              <Bounds fit clip observe margin={0.2}>
-                  <Center bottom>
-                     <Resize scale={4}>
-                        <Model 
-                            url={item.modelUrl} 
-                            textures={item.textures} 
-                            resources={item.resources} 
-                            textureFlipY={item.textureFlipY} 
-                        />
-                     </Resize>
-                  </Center>
-              </Bounds>
+              {/* Sử dụng Center không tham số để căn giữa tâm hình học vào (0,0,0) -> Luôn nằm giữa màn hình */}
+              <Center>
+                <Resize scale={4}>
+                  <Model 
+                      url={item.modelUrl} 
+                      textures={item.textures} 
+                      resources={item.resources} 
+                      textureFlipY={item.textureFlipY} 
+                  />
+                </Resize>
+              </Center>
               
-              {/* Bóng đổ ở vị trí 0 (chân) */}
-              <ContactShadows position={[0, 0, 0]} opacity={0.5} scale={10} blur={2.5} far={4} color="#000000" />
+              {/* Đặt bóng đổ thấp xuống một chút để tạo không gian (khoảng -2.2 cho scale 4) */}
+              <ContactShadows position={[0, -2.2, 0]} opacity={0.4} scale={10} blur={2.5} far={4} color="#000000" />
               
               <Environment preset="city" />
               {/* @ts-ignore */}
@@ -134,20 +133,18 @@ const Toy3D: React.FC<Toy3DProps> = ({ item }) => {
               <pointLight position={[0, 1, 2]} intensity={0.5} color="#ffdcae" />
             </Suspense>
             
-            {/* 
-              Target: [0, 1.5, 0] -> Nhìn vào phần thân (cao 1.5 đơn vị so với đất).
-              Điều này khiến phần chân (0) nằm thấp xuống phía dưới màn hình.
-            */}
             <OrbitControls 
                 autoRotate 
-                autoRotateSpeed={0.5} 
+                autoRotateSpeed={1} 
                 makeDefault 
                 enableZoom={true} 
                 enablePan={true} 
-                maxPolarAngle={Math.PI / 2 + 0.1} 
+                // screenSpacePanning=true: Kéo như kéo ảnh (lên/xuống/trái/phải) thay vì kéo theo mặt phẳng camera
+                screenSpacePanning={true}
                 minDistance={2} 
-                maxDistance={10}
-                target={[0, 1.5, 0]}
+                maxDistance={20}
+                // Target [0,0,0] để camera luôn xoay quanh tâm mô hình
+                target={[0, 0, 0]}
             />
           </Canvas>
         </ModelErrorBoundary>
