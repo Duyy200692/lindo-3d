@@ -1,33 +1,22 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { DiscoveryItem, AppMode, FunFactData, TextureMaps } from './types';
 import Toy3D from './components/Toy3D';
 import { fetchFunFact } from './services/geminiService';
 import { saveModelToLibrary, loadLibrary, deleteFromLibrary } from './utils/storage';
 import { db } from './firebaseConfig';
-import { 
-  Sparkles, ArrowLeft, Volume2, Rotate3d, Upload, 
-  ArrowRight, Wand2, Save, Library, Trash2, 
-  Image as ImageIcon, Check, Zap, Wifi, WifiOff, 
-  Loader2, Lock, Settings, X, Box, Layers
-} from 'lucide-react';
+import { Sparkles, ArrowLeft, Volume2, Rotate3d, Info, Upload, ArrowRight, Wand2, Save, Library, Trash2, Image as ImageIcon, Layers, Check, Zap, RefreshCw, Lightbulb, Wifi, WifiOff, Loader2 } from 'lucide-react';
 
 export default function App() {
   const [mode, setMode] = useState<AppMode>(AppMode.GALLERY);
   const [selectedItem, setSelectedItem] = useState<DiscoveryItem | null>(null);
   const [factData, setFactData] = useState<FunFactData | null>(null);
   const [loading, setLoading] = useState(false);
-  const [loadingLibrary, setLoadingLibrary] = useState(true);
   const [speaking, setSpeaking] = useState(false);
   const [savedItems, setSavedItems] = useState<{ item: DiscoveryItem, factData: FunFactData }[]>([]);
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [isOnline, setIsOnline] = useState(false);
+  const [isAppReady, setIsAppReady] = useState(false);
   
-  // Admin logic
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [showPinDialog, setShowPinDialog] = useState(false);
-  const [pinInput, setPinInput] = useState("");
-  
-  // Model creation state
+  // State for the "Name Input" step
   const [showNameInput, setShowNameInput] = useState(false);
   const [tempModelUrl, setTempModelUrl] = useState<string | null>(null);
   const [tempTextures, setTempTextures] = useState<TextureMaps>({});
@@ -42,33 +31,31 @@ export default function App() {
   const multiTextureInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    const handleStatusChange = () => setIsOnline(navigator.onLine);
-    window.addEventListener('online', handleStatusChange);
-    window.addEventListener('offline', handleStatusChange);
-    loadSavedLibrary();
+    const initApp = async () => {
+      setIsOnline(!!db);
+      await loadSavedLibrary();
+      setIsAppReady(true);
+    };
+    
+    initApp();
+
     return () => {
-      window.removeEventListener('online', handleStatusChange);
-      window.removeEventListener('offline', handleStatusChange);
       window.speechSynthesis.cancel();
     };
   }, []);
 
   const loadSavedLibrary = async () => {
-    setLoadingLibrary(true);
     try {
-      if (db) {
-        const library = await loadLibrary();
-        setSavedItems(library);
-      }
+      const library = await loadLibrary();
+      setSavedItems(library);
     } catch (e) {
       console.error("Failed to load library", e);
-    } finally {
-      setLoadingLibrary(false);
+      setSavedItems([]);
     }
   };
 
   const handleBack = () => {
-    setMode(isAdmin ? AppMode.ADMIN : AppMode.GALLERY);
+    setMode(AppMode.GALLERY);
     setSelectedItem(null);
     setFactData(null);
     setShowNameInput(false);
@@ -89,32 +76,19 @@ export default function App() {
       setSpeaking(false);
       return;
     }
+
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = 'vi-VN';
     utterance.rate = 0.9;
+    utterance.pitch = 1.1;
     utterance.onend = () => setSpeaking(false);
     setSpeaking(true);
     window.speechSynthesis.speak(utterance);
   };
 
-  const handleVerifyPin = () => {
-    if (pinInput === "1234") {
-      setIsAdmin(true);
-      setMode(AppMode.ADMIN);
-      setShowPinDialog(false);
-      setPinInput("");
-    } else {
-      alert("Mật mã chưa đúng rồi ba mẹ ơi!");
-      setPinInput("");
-    }
+  const handleUploadClick = () => {
+    fileInputRef.current?.click();
   };
-
-  const handleExitAdmin = () => {
-    setIsAdmin(false);
-    setMode(AppMode.GALLERY);
-  };
-
-  const handleUploadClick = () => fileInputRef.current?.click();
 
   const handleModelFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
@@ -123,7 +97,7 @@ export default function App() {
     const mainFile = fileArray.find(f => f.name.toLowerCase().endsWith('.gltf') || f.name.toLowerCase().endsWith('.glb'));
 
     if (!mainFile) {
-      alert("Chọn file .glb hoặc .gltf nhé!");
+      alert("Bé ơi, bé cần chọn file có đuôi .gltf hoặc .glb nhé!");
       return;
     }
 
@@ -135,9 +109,83 @@ export default function App() {
     setTempModelUrl(resources[mainFile.name]);
     setTempResources(resources);
     setShowNameInput(true);
-    setCustomName("");
     setTempTextures({});
     setTempFlipY(false);
+
+    if (mainFile.name.toLowerCase().endsWith('.gltf') && fileArray.length === 1) {
+       alert("Lưu ý: Với file .gltf, bé hãy chọn cùng lúc cả file .bin và hình ảnh đi kèm để mô hình hiển thị đúng nhé!");
+    }
+    event.target.value = '';
+  };
+
+  const handleTextureClick = (type: keyof TextureMaps) => {
+    setActiveTextureType(type);
+    setTimeout(() => {
+        textureInputRef.current?.click();
+    }, 50);
+  }
+
+  const handleTextureFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file || !activeTextureType) return;
+    const objectUrl = URL.createObjectURL(file);
+    setTempTextures(prev => ({ ...prev, [activeTextureType]: objectUrl }));
+    event.target.value = '';
+    setActiveTextureType(null);
+  };
+
+  const handleMagicUploadClick = () => {
+    multiTextureInputRef.current?.click();
+  }
+
+  const handleMultiTextureChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
+
+    const newTextures: TextureMaps = { ...tempTextures };
+    let detectedList: string[] = [];
+
+    Array.from(files).forEach((file: File) => {
+        const lowerName = file.name.toLowerCase();
+        const objectUrl = URL.createObjectURL(file);
+        
+        if (lowerName.includes('base') || lowerName.includes('color') || lowerName.includes('albedo') || lowerName.includes('diff')) {
+            newTextures.map = objectUrl;
+            detectedList.push("Màu da (Color)");
+        } 
+        else if (lowerName.includes('norm') || lowerName.includes('nrm')) {
+            newTextures.normalMap = objectUrl;
+            detectedList.push("Độ sần (Normal)");
+        } 
+        else if (lowerName.includes('rough') || lowerName.includes('rgh')) {
+            newTextures.roughnessMap = objectUrl;
+            detectedList.push("Độ bóng (Roughness)");
+            if (lowerName.includes('met') || lowerName.includes('mtl')) {
+                newTextures.metalnessMap = objectUrl;
+                detectedList.push("Kim loại (Metallic)");
+            }
+        } 
+        else if (lowerName.includes('met') || lowerName.includes('mtl') || lowerName.includes('metal')) {
+            newTextures.metalnessMap = objectUrl;
+            detectedList.push("Kim loại (Metallic)");
+        } 
+        else if (lowerName.includes('ao') || lowerName.includes('occ') || lowerName.includes('ambient')) {
+            newTextures.aoMap = objectUrl;
+            detectedList.push("Đổ bóng (AO)");
+        }
+        else if (lowerName.includes('emissive') || lowerName.includes('emit') || lowerName.includes('glow')) {
+            newTextures.emissiveMap = objectUrl;
+            detectedList.push("Phát sáng (Emissive)");
+        }
+    });
+
+    if (detectedList.length > 0) {
+        setTempTextures(newTextures);
+        const unique = Array.from(new Set(detectedList));
+        alert(`Đã tự động tìm thấy:\n- ${unique.join('\n- ')}`);
+    } else {
+        alert("Không nhận diện được tên file. Bé hãy thử chọn từng ô nhé!");
+    }
     event.target.value = '';
   };
 
@@ -145,20 +193,35 @@ export default function App() {
     if (!tempModelUrl) return;
     const finalName = customName.trim() || "Mô hình bí ẩn";
     const tempId = `temp-${Date.now()}`;
+
     const customItem: DiscoveryItem = {
-      id: tempId, name: finalName, icon: '✨', modelUrl: tempModelUrl,
-      textures: tempTextures, resources: tempResources, textureFlipY: tempFlipY, 
-      color: 'bg-indigo-400', modelType: 'model', baseColor: '#818cf8'
+      id: tempId,
+      name: finalName,
+      icon: '✨',
+      modelUrl: tempModelUrl,
+      textures: tempTextures, 
+      resources: tempResources,
+      textureFlipY: tempFlipY, 
+      color: 'bg-indigo-400',
+      modelType: 'model',
+      baseColor: '#818cf8'
     };
+
     setSelectedItem(customItem);
     setShowNameInput(false); 
     setMode(AppMode.VIEWER); 
     setLoading(true); 
+
     try {
         const data = await fetchFunFact(finalName);
         setFactData(data);
     } catch (e) {
-        setFactData({ name: finalName, description: "Xem mô hình 3D tuyệt đẹp!", funFact: "Thế giới 3D thật thú vị!", soundText: "..." });
+        setFactData({
+            name: finalName,
+            description: "Chưa tải được thông tin, bé xem mô hình nhé!",
+            funFact: "Thế giới 3D thật thú vị!",
+            soundText: "..."
+        });
     } finally {
         setLoading(false);
     }
@@ -166,17 +229,14 @@ export default function App() {
 
   const handleSaveToLibrary = async () => {
     if (!selectedItem || !factData || !selectedItem.modelUrl) return;
-    if (!isOnline) { alert("Cần có mạng để lưu mây ba mẹ nhé!"); return; }
     setIsSaving(true);
     try {
       await saveModelToLibrary(selectedItem, factData, selectedItem.modelUrl, selectedItem.textures, selectedItem.resources);
-      alert("Lưu thành công vào bộ sưu tập!");
+      alert("Đã lưu vào bộ sưu tập!");
       setIsSaving(false);
-      setMode(AppMode.ADMIN);
-      setSelectedItem(null);
       loadSavedLibrary();
-    } catch (e: any) {
-      alert(`Lỗi: ${e.message}`);
+    } catch (e) {
+      alert("Không lưu được, bộ nhớ đầy hoặc mất kết nối!");
       setIsSaving(false);
     }
   };
@@ -189,210 +249,221 @@ export default function App() {
 
   const handleDeleteItem = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
-    if(confirm("Xác nhận xóa mô hình này?")) {
+    if(confirm("Bé có chắc muốn xóa không?")) {
         await deleteFromLibrary(id);
         loadSavedLibrary();
     }
   }
 
-  // Logic tự động nhận diện Texture dựa trên tên file
-  const handleAutoTextureSelection = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = event.target.files;
-    if (!files || files.length === 0) return;
-    
-    const newTextures: TextureMaps = { ...tempTextures };
-    
-    Array.from(files).forEach((file: File) => {
-      const name = file.name.toLowerCase();
-      const url = URL.createObjectURL(file);
-      
-      // Quy tắc nhận diện tên file phổ biến trong thiết kế 3D
-      if (name.includes('base') || name.includes('color') || name.includes('diffuse') || name.includes('albedo')) {
-        newTextures.map = url;
-      } else if (name.includes('norm')) {
-        newTextures.normalMap = url;
-      } else if (name.includes('rough')) {
-        newTextures.roughnessMap = url;
-      } else if (name.includes('metal') || name.includes('spec')) {
-        newTextures.metalnessMap = url;
-      } else if (name.includes('ao') || name.includes('occlusion')) {
-        newTextures.aoMap = url;
-      } else if (name.includes('emissive') || name.includes('glow')) {
-        newTextures.emissiveMap = url;
-      }
-    });
-
-    setTempTextures(newTextures);
-    event.target.value = ''; // Reset input
-  };
-
   const TextureButton = ({ type, label, iconClass }: { type: keyof TextureMaps, label: string, iconClass: string }) => {
     const textureUrl = tempTextures[type];
     const isSet = !!textureUrl;
+
     return (
         <button 
-          onClick={() => { setActiveTextureType(type); setTimeout(() => textureInputRef.current?.click(), 50); }} 
-          className={`relative flex flex-col items-center justify-center p-2 rounded-2xl border-2 transition-all h-28 overflow-hidden group shadow-sm ${isSet ? 'border-orange-500 bg-orange-50/50' : 'border-slate-100 bg-white hover:border-orange-200'}`}
+            onClick={() => handleTextureClick(type)}
+            className={`relative flex flex-col items-center justify-center p-2 rounded-xl border-2 transition-all h-28 overflow-hidden group ${
+                isSet 
+                ? 'border-indigo-500 bg-indigo-50' 
+                : 'border-slate-200 bg-slate-50 hover:bg-white hover:border-indigo-300'
+            }`}
         >
             {isSet ? (
-                <div className="absolute inset-0">
-                  <img src={textureUrl} className="w-full h-full object-cover opacity-80" />
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent flex items-end p-2">
-                    <Check className="w-4 h-4 text-white" />
-                  </div>
-                </div>
+                <>
+                    <div className="absolute inset-0 w-full h-full">
+                        <img src={textureUrl} alt={label} className="w-full h-full object-cover opacity-80 group-hover:scale-110 transition-transform duration-500" />
+                        <div className="absolute inset-0 bg-black/10"></div>
+                    </div>
+                    <div className="absolute top-1 right-1 bg-green-500 text-white rounded-full p-0.5 z-10 shadow-sm">
+                        <Check className="w-3 h-3"/>
+                    </div>
+                </>
             ) : (
-                <div className={`w-10 h-10 rounded-2xl flex items-center justify-center mb-2 bg-slate-50 ${iconClass}`}><ImageIcon className="w-5 h-5" /></div>
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center mb-2 bg-slate-200 ${iconClass}`}>
+                    <ImageIcon className="w-5 h-5" />
+                </div>
             )}
-            <span className={`relative z-10 text-[10px] font-black uppercase tracking-wider ${isSet ? 'text-white' : 'text-slate-400'}`}>{label}</span>
+            <span className={`relative z-10 text-[10px] font-bold text-center leading-tight px-1 py-0.5 rounded ${isSet ? 'bg-white/90 text-slate-800 shadow-sm' : 'text-slate-500'}`}>
+                {label}
+            </span>
         </button>
     )
   }
 
+  if (!isAppReady) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 text-center">
+        <div className="bg-white p-10 rounded-[40px] shadow-xl border border-slate-100 animate-float">
+          <Rotate3d className="w-16 h-16 text-indigo-500 mx-auto mb-4 animate-spin-fast" />
+          <h2 className="text-2xl font-black text-slate-800 mb-2">Đang kết nối thư viện...</h2>
+          <p className="text-slate-500">Chờ một xíu để Kiddo chuẩn bị dữ liệu nhé!</p>
+          <div className="mt-8 flex justify-center gap-1">
+             <div className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" style={{animationDelay: '0s'}}></div>
+             <div className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></div>
+             <div className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" style={{animationDelay: '0.4s'}}></div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 relative overflow-hidden font-sans flex flex-col animate-fadeIn">
-      {/* Hidden Inputs */}
+    <div className="min-h-screen bg-slate-50 text-slate-800 relative overflow-hidden font-sans flex flex-col">
       <input type="file" ref={fileInputRef} onChange={handleModelFileChange} accept=".glb,.gltf,.bin,.png,.jpg,.jpeg" multiple className="hidden" />
-      <input type="file" ref={textureInputRef} onChange={(e) => {
-        const file = e.target.files?.[0];
-        if (file && activeTextureType) {
-          setTempTextures(prev => ({ ...prev, [activeTextureType]: URL.createObjectURL(file) }));
-        }
-        e.target.value = '';
-        setActiveTextureType(null);
-      }} accept="image/*" className="hidden" />
-      <input type="file" ref={multiTextureInputRef} onChange={handleAutoTextureSelection} accept="image/*" multiple className="hidden" />
+      <input type="file" ref={textureInputRef} onChange={handleTextureFileChange} accept="image/png,image/jpeg,image/jpg" className="hidden" />
+      <input type="file" ref={multiTextureInputRef} onChange={handleMultiTextureChange} accept="image/png,image/jpeg,image/jpg" multiple className="hidden" />
+
+      <div className="absolute top-[-10%] left-[-10%] w-[60%] h-[60%] bg-blue-200 rounded-full blur-3xl opacity-30 z-0 animate-pulse"></div>
+      <div className="absolute bottom-[-10%] right-[-10%] w-[70%] h-[70%] bg-purple-200 rounded-full blur-3xl opacity-30 z-0 animate-pulse" style={{animationDelay: '2s'}}></div>
 
       <header className="relative z-20 px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className="p-2 bg-white rounded-xl shadow-sm">
-            <Rotate3d className={`w-6 h-6 ${isAdmin ? 'text-orange-500' : 'text-indigo-500'}`} />
+            <Rotate3d className="w-8 h-8 text-indigo-500" />
           </div>
-          <div>
-            <h1 className="text-xl font-bold text-slate-700 leading-none">Kiddo<span className={isAdmin ? 'text-orange-500' : 'text-indigo-500'}>Builder</span></h1>
-            {isAdmin && <span className="text-[9px] font-black uppercase tracking-tighter text-orange-400">Góc Phụ Huynh</span>}
-          </div>
+          <h1 className="text-2xl font-bold text-slate-700 tracking-tight">Kiddo<span className="text-indigo-500">Builder</span></h1>
         </div>
-
-        <div className="flex items-center gap-2">
-          <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full border ${isOnline ? 'bg-green-50 border-green-100 text-green-600' : 'bg-red-50 border-red-100 text-red-500'}`}>
-            <span className="text-[10px] font-black uppercase tracking-widest">{isOnline ? 'Mây' : 'Offline'}</span>
-          </div>
-          
-          {isAdmin ? (
-            <button onClick={handleExitAdmin} className="p-2 bg-orange-500 text-white rounded-xl shadow-md active:scale-95 transition-all">
-              <X className="w-5 h-5" />
-            </button>
-          ) : (
-            <button onClick={() => setShowPinDialog(true)} className="p-2 bg-white text-slate-300 rounded-xl hover:text-indigo-400 transition-colors">
-              <Lock className="w-5 h-5" />
-            </button>
-          )}
+        <div className="flex items-center gap-2 bg-white/60 px-3 py-1.5 rounded-full backdrop-blur-sm border border-slate-100">
+           {isOnline ? (
+               <><Wifi className="w-4 h-4 text-green-500" /><span className="text-xs font-bold text-green-600">Online</span></>
+           ) : (
+               <><WifiOff className="w-4 h-4 text-slate-400" /><span className="text-xs font-bold text-slate-500">Offline</span></>
+           )}
         </div>
       </header>
 
-      <main className="relative z-10 container mx-auto px-4 max-w-lg flex-1 flex flex-col justify-center overflow-hidden">
-        {/* GALLERY MODE (KIDS VIEW) */}
-        {mode === AppMode.GALLERY && (
-          <div className="flex flex-col h-full animate-fadeIn">
-            <div className="flex items-center justify-center py-6">
-              <div className="text-center">
-                <h2 className="text-2xl font-black text-slate-800">Chào bé yêu!</h2>
-                <p className="text-slate-400 text-sm">Hôm nay bé muốn xem gì nào?</p>
+      <main className="relative z-10 container mx-auto px-4 max-w-lg flex-1 flex flex-col justify-center">
+        {mode === AppMode.GALLERY && !showNameInput && (
+          <div className="flex flex-col h-full animate-fadeIn pb-20">
+            <div className="flex flex-col items-center justify-center py-6">
+              <div className="text-center mb-4">
+                <h2 className="text-3xl font-black text-slate-800 mb-1">Tạo Mô Hình Mới</h2>
+                <p className="text-slate-500 text-sm">Chọn file .glb hoặc (.gltf + .bin) nhé</p>
               </div>
-            </div>
-            
-            <div className="flex-1 overflow-y-auto no-scrollbar pb-6 px-1 grid grid-cols-2 gap-4">
-              {loadingLibrary ? (
-                <div className="col-span-2 flex flex-col items-center py-12 opacity-30">
-                  <Loader2 className="w-8 h-8 animate-spin mb-2" />
+              <button
+                onClick={handleUploadClick}
+                className="group relative w-full h-32 bg-white border-4 border-dashed border-indigo-300 rounded-[24px] hover:bg-indigo-50 hover:border-indigo-500 hover:scale-[1.02] active:scale-95 transition-all duration-300 flex flex-col items-center justify-center shadow-lg shadow-indigo-100/50"
+              >
+                <div className="w-12 h-12 mb-1 bg-indigo-100 rounded-full flex items-center justify-center text-indigo-500 group-hover:rotate-12 transition-transform duration-500">
+                  <Upload className="w-6 h-6" />
                 </div>
-              ) : savedItems.length === 0 ? (
-                <div className="col-span-2 text-center py-12 bg-white/50 rounded-3xl border-2 border-dashed border-slate-200">
-                  <p className="text-slate-400 text-sm px-10">Nhờ ba mẹ tải thêm mô hình 3D cho bé nhé!</p>
-                </div>
-              ) : (
-                savedItems.map((record) => (
-                  <button key={record.item.id} onClick={() => handleOpenLibraryItem(record)} className="bg-white p-4 rounded-[32px] shadow-sm border border-slate-100 flex flex-col items-center gap-3 active:scale-[0.95] transition-all group aspect-square justify-center relative overflow-hidden">
-                    <div className="absolute top-0 right-0 p-2 opacity-10 group-hover:rotate-12 transition-transform">
-                       <Rotate3d className="w-8 h-8" />
-                    </div>
-                    <div className="text-5xl mb-2">{record.item.icon}</div>
-                    <h4 className="font-bold text-slate-700 text-sm text-center">{record.factData.name}</h4>
-                  </button>
-                ))
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* ADMIN MODE (PARENTS VIEW) */}
-        {mode === AppMode.ADMIN && (
-          <div className="flex flex-col h-full animate-fadeIn">
-            <div className="py-4">
-              <div className="bg-orange-50 border-2 border-orange-200 p-4 rounded-[28px] mb-4">
-                 <h3 className="text-orange-700 font-bold mb-1 flex items-center gap-2 text-sm">
-                   <Settings className="w-4 h-4" /> Hướng dẫn Phụ huynh
-                 </h3>
-                 <p className="text-orange-600/80 text-[10px] leading-relaxed">
-                   Tải file <b>.glb</b> hoặc <b>.gltf</b>. Sau đó nạp Texture (ảnh da) nếu mô hình yêu cầu ảnh rời.
-                 </p>
-              </div>
-              <button onClick={handleUploadClick} className="group relative w-full h-24 bg-white border-4 border-dashed border-orange-200 rounded-[28px] hover:border-orange-400 active:scale-95 transition-all flex flex-col items-center justify-center shadow-sm">
-                <div className="w-10 h-10 mb-1 bg-orange-50 rounded-full flex items-center justify-center text-orange-500"><Upload className="w-5 h-5" /></div>
-                <span className="text-orange-600 font-bold text-sm">Tải mô hình lên</span>
+                <span className="text-indigo-600 font-bold">Mở file của bé</span>
+                <span className="text-[10px] text-slate-400 mt-1">(Hỗ trợ .glb và .gltf)</span>
+                <Sparkles className="absolute top-4 right-4 text-yellow-400 w-4 h-4 animate-bounce" />
               </button>
             </div>
 
-            <div className="flex-1 overflow-hidden flex flex-col min-h-0">
-              <div className="flex items-center gap-2 mb-3 px-1">
-                <Library className="w-4 h-4 text-slate-400" />
-                <h3 className="text-sm font-bold text-slate-500 uppercase tracking-widest">Kho đồ chơi ({savedItems.length})</h3>
+            <div className="flex-1 overflow-hidden flex flex-col">
+              <div className="flex items-center gap-2 mb-3 px-2">
+                <Library className="w-5 h-5 text-indigo-500" />
+                <h3 className="text-lg font-bold text-slate-700">Bộ Sưu Tập Của Bé</h3>
               </div>
-              
-              <div className="flex-1 overflow-y-auto no-scrollbar pb-6 px-1 space-y-3">
-                {savedItems.map((record) => (
-                  <div key={record.item.id} className="bg-white p-3 rounded-2xl shadow-sm border border-slate-100 flex items-center gap-3">
-                    <div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-xl shrink-0">{record.item.icon}</div>
-                    <div className="flex-1 min-w-0">
-                       <h4 className="font-bold text-slate-700 truncate text-sm">{record.factData.name}</h4>
-                       <p className="text-[10px] text-slate-400">3D Model Ready</p>
-                    </div>
-                    <button onClick={(e) => handleDeleteItem(e, record.item.id)} className="p-2 text-red-300 hover:text-red-500 transition-colors"><Trash2 className="w-4 h-4" /></button>
+              <div className="flex-1 overflow-y-auto no-scrollbar space-y-3 pb-4 px-1">
+                {savedItems.length === 0 ? (
+                  <div className="text-center py-10 opacity-50 border-2 border-dashed border-slate-200 rounded-3xl">
+                    <p className="text-sm">Chưa có mô hình nào được lưu.</p>
                   </div>
-                ))}
+                ) : (
+                  savedItems.map((record) => (
+                    <div key={record.item.id} onClick={() => handleOpenLibraryItem(record)} className="bg-white p-3 rounded-2xl shadow-sm border border-slate-100 flex items-center gap-3 hover:bg-slate-50 active:scale-[0.98] transition-all relative group">
+                      <div className="w-14 h-14 bg-indigo-50 rounded-xl flex items-center justify-center text-2xl overflow-hidden shrink-0">
+                        {record.item.icon}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                         <h4 className="font-bold text-slate-800 text-base truncate">{record.factData.name}</h4>
+                         <p className="text-xs text-slate-400 truncate">Đã lưu bộ sưu tập</p>
+                      </div>
+                      <button onClick={(e) => handleDeleteItem(e, record.item.id)} className="p-2 bg-red-50 text-red-400 rounded-full opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-100 hover:text-red-500">
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
           </div>
         )}
 
-        {/* VIEWER MODE (COMMON) */}
-        {mode === AppMode.VIEWER && selectedItem && (
-          <div className="h-full flex flex-col animate-fadeIn pb-4">
-            <div className="flex items-center justify-between mb-2">
-              <button onClick={handleBack} className="p-2 bg-white rounded-xl shadow-sm text-slate-400 hover:bg-slate-50"><ArrowLeft className="w-5 h-5" /></button>
-              {isAdmin && selectedItem.id.startsWith('temp') && (
-                <button onClick={handleSaveToLibrary} disabled={isSaving} className="px-4 py-2 bg-orange-500 rounded-full shadow-md font-bold text-xs text-white flex items-center gap-2">
-                  {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />} {isSaving ? "Đang lưu..." : "Lưu vào kho"}
-                </button>
-              )}
-            </div>
-            <div className="flex-1 min-h-0 relative">
-               <Toy3D item={selectedItem} />
-            </div>
-            <div className="bg-white rounded-[32px] p-5 shadow-sm border border-slate-100 mt-2">
-              {loading ? (
-                <div className="py-4 flex flex-col items-center justify-center"><Loader2 className="w-8 h-8 text-indigo-200 animate-spin" /></div>
-              ) : factData ? (
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <h2 className="text-xl font-black text-slate-800">{factData.name}</h2>
-                    <button onClick={() => speakText(`${factData.name}. ${factData.description}`)} className={`p-2 rounded-full ${speaking ? 'bg-red-500 text-white' : 'bg-indigo-50 text-indigo-500'}`}><Volume2 className="w-5 h-5" /></button>
+        {showNameInput && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fadeIn">
+            <div className="bg-white rounded-3xl shadow-2xl p-6 w-full max-w-md relative overflow-hidden flex flex-col max-h-[90vh]">
+               <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-indigo-400 to-purple-400"></div>
+               <div className="text-center mb-4 mt-2 shrink-0">
+                 <div className="w-12 h-12 bg-indigo-100 rounded-full flex items-center justify-center mx-auto mb-2 text-indigo-600">
+                    <Wand2 className="w-6 h-6" />
+                 </div>
+                 <h3 className="text-xl font-bold text-slate-800">Hoàn thiện mô hình</h3>
+               </div>
+               <div className="space-y-4 overflow-y-auto flex-1 px-1 py-2 no-scrollbar">
+                  <div>
+                    <label className="block text-sm font-bold text-slate-500 mb-1 ml-1">1. Tên gọi</label>
+                    <input autoFocus type="text" value={customName} onChange={(e) => setCustomName(e.target.value)} placeholder="Ví dụ: Khủng long..." className="w-full px-4 py-3 bg-slate-50 border-2 border-slate-200 rounded-xl focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100 outline-none font-bold text-slate-700" />
                   </div>
-                  <p className="text-slate-500 text-sm font-medium leading-relaxed mb-3">{factData.description}</p>
-                  <div className="bg-yellow-50 p-3 rounded-2xl flex gap-2 border border-yellow-100">
-                    <Sparkles className="w-4 h-4 text-orange-400 shrink-0" />
-                    <p className="text-[11px] text-slate-600 italic">{factData.funFact}</p>
+                  <div>
+                     <button onClick={handleMagicUploadClick} className="w-full mb-3 py-3 px-4 bg-gradient-to-r from-violet-500 to-fuchsia-500 rounded-xl text-white font-bold shadow-lg shadow-purple-200 flex items-center justify-center gap-2 hover:scale-[1.02] active:scale-95 transition-all">
+                        <Zap className="w-5 h-5 text-yellow-300 fill-yellow-300" />
+                        <span>Tự động chọn tất cả ảnh</span>
+                     </button>
+                     <div className="grid grid-cols-3 gap-2">
+                        <TextureButton type="map" label="Màu da" iconClass="text-pink-500" />
+                        <TextureButton type="normalMap" label="Độ sần" iconClass="text-blue-500" />
+                        <TextureButton type="roughnessMap" label="Độ bóng" iconClass="text-slate-500" />
+                     </div>
+                     <div className="mt-4 flex items-center justify-between bg-orange-50 p-3 rounded-xl border border-orange-100">
+                         <span className="text-sm font-bold text-orange-700">Lật ngược ảnh?</span>
+                         <label className="relative inline-flex items-center cursor-pointer">
+                            <input type="checkbox" className="sr-only peer" checked={tempFlipY} onChange={(e) => setTempFlipY(e.target.checked)} />
+                            <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-orange-500"></div>
+                        </label>
+                     </div>
+                  </div>
+               </div>
+               <div className="flex gap-3 mt-4 shrink-0 pt-2 border-t border-slate-100">
+                 <button onClick={handleBack} className="flex-1 py-3 px-4 rounded-xl font-bold text-slate-500 hover:bg-slate-100 transition-colors">Hủy</button>
+                 <button onClick={handleConfirmName} disabled={!customName.trim()} className="flex-1 py-3 px-4 rounded-xl font-bold text-white bg-indigo-500 hover:bg-indigo-600 active:scale-95 transition-all shadow-lg shadow-indigo-200 disabled:opacity-50">Xong <ArrowRight className="w-5 h-5" /></button>
+               </div>
+            </div>
+          </div>
+        )}
+
+        {mode === AppMode.VIEWER && selectedItem && (
+          <div className="h-full flex flex-col animate-slideUp pb-6">
+            <div className="flex items-center justify-between mb-4">
+              <button onClick={handleBack} className="p-3 bg-white rounded-2xl shadow-md text-slate-600 hover:bg-slate-50 transition-transform z-20"><ArrowLeft className="w-6 h-6" /></button>
+              <button onClick={handleSaveToLibrary} disabled={isSaving} className="px-4 py-2 bg-white rounded-full shadow-md text-indigo-500 font-bold border border-indigo-100 flex items-center gap-2 active:scale-95 z-20">
+                {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                <span className="text-sm">{isSaving ? "Đang lưu..." : "Lưu lại"}</span>
+              </button>
+            </div>
+            <div className="flex-1 relative flex items-center justify-center mb-4 min-h-[40vh]">
+              <Toy3D item={selectedItem} />
+            </div>
+            <div className="bg-white rounded-[32px] shadow-lg p-6 flex flex-col z-20 border border-slate-100 relative overflow-hidden">
+              {loading ? (
+                <div className="py-8 flex flex-col items-center justify-center text-center space-y-4">
+                  <Loader2 className="w-12 h-12 text-indigo-500 animate-spin" />
+                  <p className="text-slate-500 font-medium animate-pulse">Đang tìm hiểu về {selectedItem.name}...</p>
+                </div>
+              ) : factData ? (
+                <div className="animate-fadeIn">
+                  <div className="flex items-start justify-between mb-4">
+                    <div>
+                      <h2 className="text-2xl font-black text-slate-800 leading-tight">{factData.name}</h2>
+                      <div className="inline-block bg-indigo-50 text-indigo-600 px-3 py-1 rounded-full text-sm font-bold mt-2">Âm thanh: "{factData.soundText}"</div>
+                    </div>
+                    <button onClick={() => speakText(`${factData.name}. ${factData.description} ${factData.funFact}`)} className={`p-3 rounded-full shadow-lg ${speaking ? 'bg-red-500 text-white' : 'bg-indigo-500 text-white'}`}>
+                      <Volume2 className={`w-6 h-6 ${speaking ? 'animate-pulse' : ''}`} />
+                    </button>
+                  </div>
+                  <div className="space-y-4 max-h-[25vh] overflow-y-auto no-scrollbar">
+                    <p className="text-slate-600 text-lg leading-relaxed font-medium">{factData.description}</p>
+                    <div className="bg-yellow-50 p-4 rounded-2xl flex gap-3 border border-yellow-100">
+                      <Sparkles className="w-5 h-5 text-orange-400 shrink-0 mt-0.5" />
+                      <div>
+                        <span className="block text-xs font-bold text-orange-500 uppercase mb-1">Có thể bé chưa biết</span>
+                        <p className="text-slate-700 font-medium text-sm">{factData.funFact}</p>
+                      </div>
+                    </div>
                   </div>
                 </div>
               ) : null}
@@ -400,82 +471,6 @@ export default function App() {
           </div>
         )}
       </main>
-
-      {/* PIN DIALOG FOR PARENTS */}
-      {showPinDialog && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/60 backdrop-blur-md p-4 animate-fadeIn">
-          <div className="bg-white rounded-[32px] p-8 w-full max-w-xs text-center shadow-2xl">
-            <div className="w-16 h-16 bg-indigo-100 text-indigo-500 rounded-full flex items-center justify-center mx-auto mb-4">
-              <Lock className="w-8 h-8" />
-            </div>
-            <h3 className="text-lg font-black text-slate-800 mb-2">Dành cho Phụ huynh</h3>
-            <p className="text-slate-500 text-xs mb-6">Nhập mật mã để mở quyền quản lý mô hình (Mặc định: 1234)</p>
-            <input 
-              type="password" 
-              maxLength={4}
-              value={pinInput}
-              onChange={(e) => setPinInput(e.target.value)}
-              className="w-full text-center text-3xl tracking-[1em] font-black border-b-4 border-indigo-200 outline-none mb-8 text-indigo-600 bg-transparent"
-              placeholder="••••"
-              autoFocus
-            />
-            <div className="flex gap-3">
-              <button onClick={() => setShowPinDialog(false)} className="flex-1 py-3 font-bold text-slate-400">Hủy</button>
-              <button onClick={handleVerifyPin} className="flex-2 py-3 px-6 bg-indigo-500 text-white font-bold rounded-2xl shadow-lg shadow-indigo-100">Xác nhận</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* NAME & TEXTURE INPUT OVERLAY */}
-      {showNameInput && (
-          <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4">
-            <div className="bg-white rounded-[40px] shadow-2xl p-6 w-full max-w-md flex flex-col max-h-[90vh] animate-fadeIn border-t-8 border-orange-400">
-               <h3 className="text-xl font-black text-center mb-6 text-slate-800">Cài đặt mô hình ✨</h3>
-               
-               <div className="space-y-6 overflow-y-auto no-scrollbar flex-1 mb-6 px-1">
-                  <div>
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-2 mb-2 block">Tên mô hình</label>
-                    <input autoFocus type="text" value={customName} onChange={(e) => setCustomName(e.target.value)} placeholder="Tên là gì vậy ba mẹ?" className="w-full px-5 py-4 bg-slate-50 border-2 border-slate-100 rounded-3xl focus:border-orange-400 outline-none font-bold text-slate-700" />
-                  </div>
-
-                  <div className="bg-slate-50/50 p-5 rounded-[32px] border border-slate-100">
-                     <div className="flex items-center justify-between mb-4">
-                        <div className="flex items-center gap-2">
-                           <Layers className="w-4 h-4 text-orange-400" />
-                           <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Tùy chọn Texture</span>
-                        </div>
-                        <button 
-                          onClick={() => multiTextureInputRef.current?.click()} 
-                          className="px-3 py-1.5 bg-orange-500 text-white rounded-full text-[10px] font-bold flex items-center gap-1.5 shadow-md shadow-orange-100 active:scale-95 transition-all"
-                        >
-                          <Zap className="w-3 h-3" /> Tự động nạp tất cả
-                        </button>
-                     </div>
-
-                     <div className="grid grid-cols-3 gap-3">
-                        <TextureButton type="map" label="Màu da" iconClass="text-pink-400" />
-                        <TextureButton type="normalMap" label="Khối sần" iconClass="text-blue-400" />
-                        <TextureButton type="roughnessMap" label="Độ nhám" iconClass="text-emerald-400" />
-                        <TextureButton type="metalnessMap" label="Kim loại" iconClass="text-slate-500" />
-                        <TextureButton type="aoMap" label="Đổ bóng" iconClass="text-indigo-400" />
-                        <TextureButton type="emissiveMap" label="Phát sáng" iconClass="text-yellow-400" />
-                     </div>
-                  </div>
-
-                  <div className="flex items-center gap-3 px-4 py-3 bg-white border border-slate-100 rounded-2xl">
-                     <input type="checkbox" id="flipy" checked={tempFlipY} onChange={(e) => setTempFlipY(e.target.checked)} className="w-5 h-5 accent-orange-500" />
-                     <label htmlFor="flipy" className="text-xs font-bold text-slate-500">Lật ngược ảnh (Flip Y) - Dùng nếu ảnh bị ngược</label>
-                  </div>
-               </div>
-
-               <div className="flex gap-3">
-                 <button onClick={handleBack} className="flex-1 py-4 font-bold text-slate-400 hover:text-slate-600 transition-colors">Hủy</button>
-                 <button onClick={handleConfirmName} disabled={!customName.trim()} className="flex-[2] py-4 bg-orange-500 rounded-3xl text-white font-bold shadow-xl shadow-orange-100 disabled:opacity-50 transition-all active:scale-95">Xem mô hình 3D <ArrowRight className="inline w-4 h-4 ml-1" /></button>
-               </div>
-            </div>
-          </div>
-        )}
     </div>
   );
 }
