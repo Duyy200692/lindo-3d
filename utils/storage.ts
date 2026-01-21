@@ -10,28 +10,18 @@ const COLLECTION_NAME = 'models';
 const uploadFile = async (path: string, blob: Blob): Promise<string> => {
     if (!storage) throw new Error("Storage chưa sẵn sàng.");
     
-    // Tự động đoán Content-Type chuẩn nếu blob chưa có hoặc chung chung
-    let contentType = blob.type;
-    const lowerPath = path.toLowerCase();
-    
-    if (!contentType || contentType === 'application/octet-stream') {
-        if (lowerPath.endsWith('.glb')) contentType = 'model/gltf-binary';
-        else if (lowerPath.endsWith('.gltf')) contentType = 'model/gltf+json';
-        else if (lowerPath.endsWith('.bin')) contentType = 'application/octet-stream';
-        else if (lowerPath.endsWith('.png')) contentType = 'image/png';
-        else if (lowerPath.endsWith('.jpg') || lowerPath.endsWith('.jpeg')) contentType = 'image/jpeg';
-    }
-
+    // Thêm timestamp vào tên file để tránh cache
     const storageRef = ref(storage, path);
     
+    // Metadata giúp xử lý CORS tốt hơn trên một số trình duyệt
     const metadata = {
-        contentType: contentType,
+        contentType: blob.type,
         cacheControl: 'public,max-age=3600'
     };
 
     await uploadBytes(storageRef, blob, metadata);
     const url = await getDownloadURL(storageRef);
-    console.log(`Đã upload: ${path} (${contentType})`);
+    console.log(`Đã upload: ${path}`);
     return url;
 };
 

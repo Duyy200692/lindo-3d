@@ -489,8 +489,7 @@ export default function App() {
           <div className="relative w-full h-full overflow-hidden">
             {/* 3D VIEWPORT - Nằm làm nền */}
             <div className="absolute inset-0 z-0 bg-slate-100">
-               {/* FIX: Thêm key={selectedItem.id} để reset Toy3D hoàn toàn khi đổi item */}
-               <Toy3D key={selectedItem.id} item={selectedItem} screenshotRef={screenshotRef} />
+               <Toy3D item={selectedItem} screenshotRef={screenshotRef} />
             </div>
 
             {/* CONTROL BUTTONS - Luôn nổi phía trên */}
