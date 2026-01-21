@@ -1,3 +1,4 @@
+
 import * as FirebaseApp from "firebase/app";
 import * as Firestore from "firebase/firestore";
 import * as FirebaseStorage from "firebase/storage";
@@ -19,12 +20,9 @@ const firebaseConfig = {
 // Khởi tạo Firebase App an toàn
 let app: any;
 try {
-  // Kiểm tra xem initializeApp có tồn tại không trước khi gọi
-  if (initializeApp) {
-      app = !getApps?.().length ? initializeApp(firebaseConfig) : getApp?.();
-  }
+  app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 } catch (e) {
-  console.warn("Firebase initialization skipped (Offline mode).");
+  console.error("Firebase initialization failed:", e);
 }
 
 let db: any = null;
@@ -32,10 +30,10 @@ let storage: any = null;
 
 if (app) {
   try {
-    if (getFirestore) db = getFirestore(app);
-    if (getStorage) storage = getStorage(app);
+    db = getFirestore(app);
+    storage = getStorage(app);
   } catch (error) {
-    console.warn("Firebase services unavailable (Offline mode).");
+    console.error("Firebase services initialization failed:", error);
   }
 }
 
