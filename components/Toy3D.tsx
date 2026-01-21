@@ -32,7 +32,7 @@ const ScreenshotHandler = ({ captureRef }: { captureRef?: React.MutableRefObject
 const Model = ({ url, textures, textureFlipY = false }: { url: string, textures?: TextureMaps, textureFlipY?: boolean }) => {
   const group = useRef<THREE.Group>(null);
   
-  // Tải model (lúc này URL đã được làm sạch thành blob:...)
+  // Tải model với đường dẫn Blob an toàn
   const { scene, animations } = useGLTF(url, true, true, (loader: any) => {
     if (loader.setDRACOLoader) {
         const draco = loader.dracoLoader || new THREE.DRACOLoader();
@@ -52,9 +52,12 @@ const Model = ({ url, textures, textureFlipY = false }: { url: string, textures?
         });
     }
 
-    // Apply textures
+    // Apply textures (xử lý texture ngoài nếu có)
     if (textures) {
         const texLoader = new THREE.TextureLoader();
+        // Cho phép cross-origin
+        texLoader.setCrossOrigin('anonymous');
+        
         const applyMap = async () => {
              const entries = Object.entries(textures).filter(([_, val]) => !!val);
              for (const [key, val] of entries) {
@@ -91,77 +94,94 @@ const Model = ({ url, textures, textureFlipY = false }: { url: string, textures?
   );
 };
 
-// Hook thông minh để xử lý URL dài thành URL ngắn (Blob)
+// Hook "Vá Lỗi" Model: Tải toàn bộ file về Blob Local để tránh lỗi URL dài
 const usePatchedModelUrl = (item: DiscoveryItem) => {
     const [patchedUrl, setPatchedUrl] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
         let isMounted = true;
-        
+        const generatedUrls: string[] = []; // Danh sách URL cần dọn dẹp
+
         const process = async () => {
             if (!item.modelUrl) return;
 
-            // 1. Nếu là file .glb hoặc không có resources rời -> Dùng luôn URL gốc
+            // Nếu là file .glb đơn giản hoặc không có resources đi kèm thì dùng luôn
             if (!item.resources || Object.keys(item.resources).length === 0 || item.modelUrl.toLowerCase().includes('.glb')) {
                 setPatchedUrl(item.modelUrl);
                 return;
             }
 
-            // 2. Nếu là file .gltf có resources (Cloud) -> Patch lại nội dung
             try {
-                // Tải nội dung file .gltf text về
+                // 1. Tải nội dung file .gltf
                 const response = await fetch(item.modelUrl);
+                if (!response.ok) throw new Error("Không thể tải file .gltf gốc");
                 const json = await response.json();
 
-                // Thay thế đường dẫn buffers (file .bin)
+                // Hàm hỗ trợ: Tải file phụ về Blob và trả về URL ngắn (blob:...)
+                const fetchToBlobUrl = async (originalUri: string) => {
+                    // Lấy tên file sạch (bỏ path và query param)
+                    const cleanName = originalUri.split('/').pop()?.replace(/[\?#].*$/, '') || '';
+                    
+                    // Tìm trong resources xem có file này không
+                    const resKey = Object.keys(item.resources!).find(k => k.endsWith(cleanName) || k === cleanName);
+                    
+                    if (resKey && item.resources![resKey]) {
+                        // Tải file thật từ Cloud
+                        const resResponse = await fetch(item.resources![resKey]);
+                        const blob = await resResponse.blob();
+                        const blobUrl = URL.createObjectURL(blob);
+                        generatedUrls.push(blobUrl); // Đánh dấu để xóa sau
+                        return blobUrl;
+                    }
+                    return originalUri; // Fallback (thường sẽ lỗi nếu là path tương đối)
+                };
+
+                // 2. Vá đường dẫn Buffers (.bin)
                 if (json.buffers) {
-                    json.buffers.forEach((b: any) => {
-                        const name = b.uri ? b.uri.split('/').pop().replace(/[\?#].*$/, '') : '';
-                        // Tìm trong resources xem có file này không
-                        const resKey = Object.keys(item.resources!).find(k => k.includes(name));
-                        if (resKey && item.resources![resKey]) {
-                            b.uri = item.resources![resKey]; // Thay thế bằng URL Cloud đầy đủ
-                        }
-                    });
+                    await Promise.all(json.buffers.map(async (b: any) => {
+                        if (b.uri) b.uri = await fetchToBlobUrl(b.uri);
+                    }));
                 }
 
-                // Thay thế đường dẫn images (nếu texture nhúng trong gltf)
+                // 3. Vá đường dẫn Images (Textures trong file)
                 if (json.images) {
-                    json.images.forEach((img: any) => {
+                    await Promise.all(json.images.map(async (img: any) => {
                         if (img.uri && !img.uri.startsWith('data:')) {
-                            const name = img.uri.split('/').pop().replace(/[\?#].*$/, '');
-                            const resKey = Object.keys(item.resources!).find(k => k.includes(name));
-                            if (resKey && item.resources![resKey]) {
-                                img.uri = item.resources![resKey];
-                            }
+                            img.uri = await fetchToBlobUrl(img.uri);
                         }
-                    });
+                    }));
                 }
 
-                // Tạo file Blob mới từ JSON đã sửa
-                const blob = new Blob([JSON.stringify(json)], { type: 'application/json' });
-                const blobUrl = URL.createObjectURL(blob);
-                
-                if (isMounted) setPatchedUrl(blobUrl);
+                // 4. Tạo file .gltf mới từ nội dung đã vá
+                const gltfBlob = new Blob([JSON.stringify(json)], { type: 'application/json' });
+                const gltfUrl = URL.createObjectURL(gltfBlob);
+                generatedUrls.push(gltfUrl);
+
+                if (isMounted) setPatchedUrl(gltfUrl);
 
             } catch (err: any) {
-                console.error("Lỗi patch GLTF:", err);
+                console.error("Lỗi xử lý model:", err);
                 if (isMounted) setError(err.message);
             }
         };
 
         process();
-        return () => { isMounted = false; };
+
+        // Cleanup: Xóa các Blob URL khi component unmount để giải phóng bộ nhớ
+        return () => {
+            isMounted = false;
+            generatedUrls.forEach(url => URL.revokeObjectURL(url));
+        };
     }, [item.modelUrl, item.resources, item.id]);
 
     return { patchedUrl, error };
 };
 
-// Error Boundary đơn giản hóa
+// Error Boundary cho Model
 interface ErrorBoundaryProps {
     fallback: React.ReactNode;
-    children: React.ReactNode;
+    children?: React.ReactNode;
 }
 
 interface ErrorBoundaryState {
@@ -169,10 +189,7 @@ interface ErrorBoundaryState {
 }
 
 class ModelErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  constructor(props: ErrorBoundaryProps) {
-    super(props);
-    this.state = { hasError: false };
-  }
+  public state: ErrorBoundaryState = { hasError: false };
 
   static getDerivedStateFromError() { return { hasError: true }; }
   
@@ -191,15 +208,17 @@ const Toy3D: React.FC<Toy3DProps> = ({ item, screenshotRef }) => {
         <div className="flex flex-col items-center justify-center h-full text-center p-4">
              <span className="text-4xl mb-2">🤕</span>
              <p className="text-red-500 font-bold text-sm">Không tải được file</p>
-             <button onClick={() => window.location.reload()} className="mt-2 text-xs bg-indigo-500 text-white px-3 py-1 rounded-lg">Tải lại</button>
+             <p className="text-xs text-slate-400 mt-1 max-w-[200px] truncate">{error}</p>
+             <button onClick={() => window.location.reload()} className="mt-3 text-xs bg-indigo-500 text-white px-4 py-2 rounded-xl font-bold shadow-lg hover:bg-indigo-600 transition-all">Thử tải lại</button>
         </div>
      )
   }
 
   if (!patchedUrl) {
       return (
-          <div className="flex items-center justify-center h-full">
-              <div className="w-8 h-8 border-4 border-indigo-200 border-t-indigo-500 rounded-full animate-spin"></div>
+          <div className="flex flex-col items-center justify-center h-full gap-3">
+              <div className="w-10 h-10 border-4 border-indigo-200 border-t-indigo-500 rounded-full animate-spin"></div>
+              <span className="text-xs font-bold text-indigo-400 animate-pulse">Đang mở hộp quà...</span>
           </div>
       )
   }
@@ -209,7 +228,8 @@ const Toy3D: React.FC<Toy3DProps> = ({ item, screenshotRef }) => {
         <ModelErrorBoundary fallback={
              <div className="flex flex-col items-center justify-center h-full text-center p-4">
                 <span className="text-4xl mb-2">🤔</span>
-                <p className="text-slate-500 font-bold text-sm">File mô hình bị lỗi rồi</p>
+                <p className="text-slate-500 font-bold text-sm">Mô hình bị lỗi rồi</p>
+                <button onClick={() => window.location.reload()} className="mt-2 text-xs text-indigo-500 underline">Tải lại trang</button>
             </div>
         }>
           <Canvas 
