@@ -36,27 +36,24 @@ const Model = ({ url, textures, resources, textureFlipY = false }: { url: string
   const group = useRef<THREE.Group>(null);
   
   // Tải mô hình
-  // QUAN TRỌNG: Tham số thứ 2 là 'true' để bật Draco Compression (rất cần thiết cho file GLB nén)
+  // QUAN TRỌNG: Tham số thứ 2 là 'true' để bật Draco Compression.
   const { scene, animations } = useGLTF(url, true, undefined, (loader: any) => {
-    // Luôn set CrossOrigin để tránh lỗi CORS với hình ảnh từ Firebase/Blob
     loader.setCrossOrigin('anonymous');
 
-    // CHỈ can thiệp vào Manager khi thực sự có resources (file bin/texture rời)
-    // Nếu resources rỗng (trường hợp file .glb đơn lẻ từ Cloud), ta dùng manager mặc định để tránh lỗi
-    if (resources && Object.keys(resources).length > 0) {
+    // FIX: Chỉ can thiệp vào Manager nếu đây là file .gltf (cần nối file bin/texture).
+    // Nếu là .glb (binary), để mặc định cho loader tự xử lý, tránh lỗi parse.
+    const isGltf = resources 
+        ? Object.keys(resources).some(k => k.toLowerCase().endsWith('.gltf')) 
+        : url.toLowerCase().includes('.gltf');
+
+    if (isGltf && resources && Object.keys(resources).length > 0) {
         loader.manager = new THREE.LoadingManager();
         loader.manager.setURLModifier((url: string) => {
-            // 1. Decode URL để xử lý %20 (khoảng trắng) và các ký tự đặc biệt
             const decodedUrl = decodeURIComponent(url);
-            
-            // 2. Lấy tên file gốc
             const fileName = decodedUrl.replace(/^.*[\\\/]/, '').replace(/[\?#].*$/, '');
-            
-            // 3. Tìm trong resources
             if (resources[fileName]) {
                 return resources[fileName];
             }
-            
             return url;
         });
     }
@@ -68,7 +65,9 @@ const Model = ({ url, textures, resources, textureFlipY = false }: { url: string
     // 1. Animation
     if (actions) {
       Object.values(actions).forEach((action: any) => {
-        action?.reset().fadeIn(0.5).play();
+        try {
+            action?.reset().fadeIn(0.5).play();
+        } catch(e) { /* Bỏ qua lỗi animation nếu model không tương thích */ }
       });
     }
 
@@ -150,7 +149,7 @@ const Toy3D: React.FC<Toy3DProps> = ({ item, screenshotRef }) => {
   if (item.modelUrl) {
     return (
       <div className="absolute inset-0 w-full h-full z-0 touch-none outline-none">
-        <ModelErrorBoundary fallback={
+        <ModelErrorBoundary key={item.id} fallback={
             <div className="flex flex-col items-center justify-center h-full text-center px-4">
                 <div className="bg-white/80 backdrop-blur-sm p-6 rounded-3xl border-2 border-red-100 shadow-sm">
                     <span className="text-4xl block mb-2">🤕</span>
@@ -158,6 +157,12 @@ const Toy3D: React.FC<Toy3DProps> = ({ item, screenshotRef }) => {
                     <span className="text-xs text-slate-400 block max-w-[200px] mx-auto">
                         Có thể do mạng yếu hoặc file bị lỗi. Bé thử chọn mô hình khác xem sao nhé!
                     </span>
+                    <button 
+                        onClick={() => window.location.reload()}
+                        className="mt-4 px-4 py-2 bg-indigo-500 text-white rounded-xl text-xs font-bold shadow-lg hover:bg-indigo-600 transition-all"
+                    >
+                        Thử tải lại trang
+                    </button>
                 </div>
             </div>
         }>
