@@ -1,4 +1,4 @@
-import React, { Component, useRef, useState, useEffect, Suspense, ReactNode } from 'react';
+import React, { useRef, useState, useEffect, Suspense, ReactNode } from 'react';
 import { DiscoveryItem, TextureMaps } from '../types';
 import { Canvas } from '@react-three/fiber';
 import { useGLTF, OrbitControls, useAnimations, Environment, Center, Bounds } from '@react-three/drei';
@@ -117,11 +117,17 @@ const Model = ({ url, textures, resources, textureFlipY = false }: { url: string
   );
 };
 
-class ModelErrorBoundary extends React.Component<{fallback: ReactNode, children?: ReactNode}, {hasError: boolean}> {
-  constructor(props: {fallback: ReactNode, children?: ReactNode}) {
-    super(props);
-    this.state = { hasError: false };
-  }
+interface ModelErrorBoundaryProps {
+  fallback: ReactNode;
+  children?: ReactNode;
+}
+
+interface ModelErrorBoundaryState {
+  hasError: boolean;
+}
+
+class ModelErrorBoundary extends React.Component<ModelErrorBoundaryProps, ModelErrorBoundaryState> {
+  public state: ModelErrorBoundaryState = { hasError: false };
 
   static getDerivedStateFromError() { return { hasError: true }; }
   
@@ -131,13 +137,17 @@ class ModelErrorBoundary extends React.Component<{fallback: ReactNode, children?
 const Toy3D: React.FC<Toy3DProps> = ({ item }) => {
   if (item.modelUrl) {
     return (
-      // Thêm 'touch-none' để ngăn trình duyệt xử lý sự kiện chạm (ngăn zoom trang)
-      // Thêm 'outline-none' để bỏ viền khi focus
-      <div className="w-full h-[400px] relative z-10 rounded-3xl overflow-hidden bg-gradient-to-b from-white/0 to-white/20 touch-none outline-none">
-        <ModelErrorBoundary fallback={<div className="flex flex-col items-center justify-center h-full text-slate-400 font-bold bg-white/50 rounded-3xl border-2 border-dashed border-slate-200">⚠️ Lỗi nạp mô hình</div>}>
-          <Canvas shadows dpr={[1, 2]} camera={{ fov: 45, position: [0, 2, 8] }}>
+      // CẬP NHẬT QUAN TRỌNG:
+      // 1. h-[90vh]: Chiều cao cực lớn, gần như toàn màn hình để tránh bị cắt đầu/chân.
+      // 2. absolute inset-x-0 top-0: Đóng đinh vị trí lên trên cùng.
+      // 3. z-30: Đè lên khung thông tin.
+      // 4. mask-image: Kỹ thuật gradient mask để làm mờ nhẹ phần chân tiếp giáp đáy màn hình (tuỳ chọn, nhưng giúp đẹp hơn).
+      <div className="w-full h-[90vh] absolute top-0 left-0 z-30 touch-none outline-none pointer-events-auto">
+        <ModelErrorBoundary fallback={<div className="flex flex-col items-center justify-center h-full text-slate-400 font-bold bg-white/50 rounded-3xl border-2 border-dashed border-slate-200 mt-20">⚠️ Lỗi nạp mô hình</div>}>
+          <Canvas shadows dpr={[1, 2]} camera={{ fov: 45, position: [0, 1, 6] }}>
             <Suspense fallback={null}>
-              <Bounds fit observe margin={1.2}>
+              {/* margin={0.65} : Giảm margin để mô hình TO HƠN, chiếm nhiều không gian hơn */}
+              <Bounds fit observe margin={0.65}>
                   <Center top>
                      <Model 
                         url={item.modelUrl} 
@@ -158,7 +168,7 @@ const Toy3D: React.FC<Toy3DProps> = ({ item }) => {
             {/* enableZoom={true} là mặc định, nhưng explicit để rõ ràng */}
             <OrbitControls autoRotate autoRotateSpeed={0.5} makeDefault enableZoom={true} enablePan={true} />
           </Canvas>
-          <div className="absolute bottom-4 right-4 bg-white/40 backdrop-blur-sm px-3 py-1 rounded-full text-[10px] font-bold text-slate-500 pointer-events-none border border-white/50">
+          <div className="absolute top-[60vh] right-4 bg-white/30 backdrop-blur-md px-3 py-1 rounded-full text-[10px] font-bold text-slate-600 pointer-events-none border border-white/50 shadow-sm z-50">
             Dùng 2 ngón tay để xoay & phóng to
           </div>
         </ModelErrorBoundary>
@@ -167,7 +177,7 @@ const Toy3D: React.FC<Toy3DProps> = ({ item }) => {
   }
 
   return (
-    <div className="flex flex-col items-center justify-center w-64 h-64 bg-white/40 rounded-full shadow-inner animate-float">
+    <div className="flex flex-col items-center justify-center w-64 h-64 bg-white/40 rounded-full shadow-inner animate-float mt-20">
       <span className="text-9xl filter drop-shadow-2xl">{item.icon}</span>
     </div>
   );
