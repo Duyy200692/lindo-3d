@@ -1,6 +1,6 @@
 import React, { Component, useRef, useState, useEffect, Suspense, ReactNode } from 'react';
 import { DiscoveryItem, TextureMaps } from '../types';
-import { Canvas, useThree, useLoader } from '@react-three/fiber';
+import { Canvas, useThree } from '@react-three/fiber';
 import { useGLTF, OrbitControls, useAnimations, Environment, Center, ContactShadows, Resize } from '@react-three/drei';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
@@ -29,7 +29,7 @@ const ScreenshotHandler = ({ captureRef }: { captureRef?: React.MutableRefObject
     return null;
 };
 
-// Hook tải và xử lý toàn bộ tài nguyên (Model + Textures) về Blob an toàn
+// Hook tải và xử lý tài nguyên
 const usePatchedResources = (item: DiscoveryItem) => {
     const [state, setState] = useState<{
         patchedUrl: string | null;
@@ -44,18 +44,41 @@ const usePatchedResources = (item: DiscoveryItem) => {
         const process = async () => {
             if (!item.modelUrl) return;
 
-            // Nếu là Blob URL (local) thì dùng luôn, không cần patch
-            if (item.modelUrl.startsWith('blob:')) {
+            // --- TỐI ƯU HÓA QUAN TRỌNG ---
+            // 1. Nếu là file local (blob:) -> Luôn xử lý để hiển thị ngay.
+            // 2. Nếu là file Cloud (http) VÀ là file đơn (.glb) -> Dùng thẳng URL, bỏ qua fetch để tránh lỗi CORS.
+            const isLocalBlob = item.modelUrl.startsWith('blob:');
+            const hasComplexResources = item.resources && Object.keys(item.resources).length > 1; // >1 vì file chính cũng nằm trong resources
+            
+            // Nếu là file Cloud đơn giản (.glb), không cần patch
+            if (!isLocalBlob && !hasComplexResources) {
+                if (isMounted) {
+                    setState({ 
+                        patchedUrl: item.modelUrl, 
+                        patchedTextures: item.textures || null, 
+                        error: null 
+                    });
+                }
+                return;
+            }
+
+            // Nếu đã vào đây thì là:
+            // a) File đang xem trước (Blob)
+            // b) File Cloud dạng split (.gltf + .bin) cần xử lý path
+            
+            // Nếu là Blob URL đơn giản thì dùng luôn
+            if (isLocalBlob && !hasComplexResources) {
                  if (isMounted) setState({ patchedUrl: item.modelUrl, patchedTextures: item.textures || null, error: null });
                  return;
             }
 
             try {
-                // --- PHẦN 1: XỬ LÝ MODEL URL ---
+                // --- BẮT ĐẦU QUÁ TRÌNH PATCH (Cho GLTF rời hoặc Blob phức tạp) ---
                 let finalModelUrl = '';
                 
-                // 1. Tải file model gốc với chế độ cors
-                const response = await fetch(item.modelUrl, { mode: 'cors' });
+                // 1. Tải file model gốc
+                // Lưu ý: Không dùng mode: 'cors' ép buộc, để browser tự xử lý
+                const response = await fetch(item.modelUrl);
                 if (!response.ok) throw new Error(`Lỗi tải model: ${response.status}`);
                 const mainBlob = await response.blob();
                 
@@ -65,38 +88,31 @@ const usePatchedResources = (item: DiscoveryItem) => {
                 const isBinaryGLB = headerView.byteLength >= 4 && headerView.getUint32(0, true) === 0x46546C67;
 
                 if (isBinaryGLB) {
-                    // Nếu là GLB, dùng luôn
                     finalModelUrl = URL.createObjectURL(mainBlob);
                     generatedUrls.push(finalModelUrl);
                 } else {
-                    // Nếu là GLTF (JSON), cần vá đường dẫn resources bên trong
+                    // Xử lý GLTF (JSON)
                     const text = await mainBlob.text();
                     let json;
                     try { json = JSON.parse(text); } catch (e) { 
-                        // Parse lỗi -> fallback dùng blob gốc
                         finalModelUrl = URL.createObjectURL(mainBlob);
                         generatedUrls.push(finalModelUrl);
                     }
 
                     if (json) {
-                        // Helper tải resource phụ
                         const fetchToBlobUrl = async (originalUri: string) => {
                             if (!item.resources) return originalUri;
                             const cleanName = decodeURIComponent(originalUri).split('/').pop()?.replace(/[\?#].*$/, '') || '';
                             
-                            // Tìm key khớp trong resources (So khớp thông minh hơn: không phân biệt hoa thường)
+                            // Tìm key khớp trong resources
                             const resKey = Object.keys(item.resources).find(k => {
                                 const decodedKey = decodeURIComponent(k);
-                                const kLower = decodedKey.toLowerCase();
-                                const nameLower = cleanName.toLowerCase();
-                                // Thử khớp chính xác hoặc khớp đuôi
-                                return decodedKey.endsWith(cleanName) || decodedKey === cleanName || k.endsWith(cleanName) ||
-                                       kLower.endsWith(nameLower) || kLower === nameLower;
+                                return decodedKey.endsWith(cleanName) || decodedKey === cleanName || k.endsWith(cleanName);
                             });
                             
                             if (resKey && item.resources[resKey]) {
                                 try {
-                                    const rRes = await fetch(item.resources[resKey], { mode: 'cors' });
+                                    const rRes = await fetch(item.resources[resKey]);
                                     const rBlob = await rRes.blob();
                                     const rUrl = URL.createObjectURL(rBlob);
                                     generatedUrls.push(rUrl);
@@ -106,7 +122,6 @@ const usePatchedResources = (item: DiscoveryItem) => {
                             return originalUri;
                         };
 
-                        // Vá buffers và images trong JSON
                         if (json.buffers) await Promise.all(json.buffers.map(async (b: any) => { if (b.uri) b.uri = await fetchToBlobUrl(b.uri); }));
                         if (json.images) await Promise.all(json.images.map(async (img: any) => { if (img.uri && !img.uri.startsWith('data:')) img.uri = await fetchToBlobUrl(img.uri); }));
 
@@ -116,7 +131,7 @@ const usePatchedResources = (item: DiscoveryItem) => {
                     }
                 }
 
-                // --- PHẦN 2: XỬ LÝ TEXTURE MAPS (DA, MÀU...) ---
+                // --- XỬ LÝ TEXTURE MAPS ---
                 const finalTextures: TextureMaps = {};
                 if (item.textures) {
                     await Promise.all(Object.entries(item.textures).map(async ([key, url]) => {
@@ -126,7 +141,7 @@ const usePatchedResources = (item: DiscoveryItem) => {
                                     // @ts-ignore
                                     finalTextures[key] = url;
                                 } else {
-                                    const tRes = await fetch(url, { mode: 'cors' });
+                                    const tRes = await fetch(url);
                                     const tBlob = await tRes.blob();
                                     const tUrl = URL.createObjectURL(tBlob);
                                     generatedUrls.push(tUrl);
@@ -134,7 +149,6 @@ const usePatchedResources = (item: DiscoveryItem) => {
                                     finalTextures[key] = tUrl;
                                 }
                             } catch (e) {
-                                console.warn(`Lỗi tải texture ${key}, dùng url gốc`);
                                 // @ts-ignore
                                 finalTextures[key] = url;
                             }
@@ -152,13 +166,12 @@ const usePatchedResources = (item: DiscoveryItem) => {
 
             } catch (err: any) {
                 console.warn("Patching failed, falling back to original URL:", err);
-                // QUAN TRỌNG: Fallback về URL gốc nếu xử lý blob thất bại
-                // Giúp file vẫn chạy được nếu lỗi do CORS hoặc parse JSON
+                // Fallback về URL gốc nếu xử lý thất bại
                 if (isMounted) {
                     setState({
                         patchedUrl: item.modelUrl || null,
                         patchedTextures: item.textures || null,
-                        error: null // Xóa lỗi để Canvas thử render bằng URL gốc
+                        error: null 
                     });
                 }
             }
@@ -178,9 +191,7 @@ const usePatchedResources = (item: DiscoveryItem) => {
 const Model = ({ url, textures, textureFlipY = false }: { url: string, textures?: TextureMaps, textureFlipY?: boolean }) => {
   const group = useRef<THREE.Group>(null);
   
-  // Sử dụng useGLTF với cấu hình thủ công để đảm bảo Draco hoạt động tốt nhất
   const { scene, animations } = useGLTF(url, true, true, (loader) => {
-     // Config loader thủ công nếu cần
      const dracoLoader = new DRACOLoader();
      dracoLoader.setDecoderPath(DRACO_URL);
      (loader as unknown as GLTFLoader).setDRACOLoader(dracoLoader);
@@ -188,19 +199,16 @@ const Model = ({ url, textures, textureFlipY = false }: { url: string, textures?
 
   const { actions } = useAnimations(animations, group);
 
-  // Xử lý Textures riêng biệt
   useEffect(() => {
-    // 1. Chạy Animation nếu có
     if (actions) {
         Object.values(actions).forEach((action: any) => {
             try { action?.reset().fadeIn(0.5).play(); } catch(e) {}
         });
     }
 
-    // 2. Áp dụng Textures (đã được chuyển thành Blob URL ngắn gọn)
     if (textures && Object.keys(textures).length > 0) {
         const texLoader = new THREE.TextureLoader();
-        texLoader.setCrossOrigin('anonymous');
+        texLoader.setCrossOrigin('anonymous'); // QUAN TRỌNG: Cho phép load ảnh từ domain khác
 
         const applyMap = async () => {
              const entries = Object.entries(textures).filter(([_, val]) => !!val);
@@ -239,7 +247,6 @@ const Model = ({ url, textures, textureFlipY = false }: { url: string, textures?
   );
 };
 
-// Error Boundary định nghĩa rõ ràng
 interface ErrorBoundaryProps { fallback: ReactNode; children?: ReactNode; }
 interface ErrorBoundaryState { hasError: boolean; }
 
@@ -257,7 +264,6 @@ class ModelErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryStat
 }
 
 const Toy3D: React.FC<Toy3DProps> = ({ item, screenshotRef }) => {
-  // Sử dụng hook mới tải tất cả về Blob
   const { patchedUrl, patchedTextures, error } = usePatchedResources(item);
 
   if (!item.modelUrl) {
@@ -270,8 +276,7 @@ const Toy3D: React.FC<Toy3DProps> = ({ item, screenshotRef }) => {
              <div className="bg-white/80 backdrop-blur-sm p-6 rounded-3xl border-2 border-red-100 shadow-sm animate-bounce">
                  <span className="text-4xl block mb-2">🤕</span>
                  <p className="text-red-500 font-bold text-sm">Không tải được file rồi</p>
-                 <p className="text-xs text-slate-400 mt-1">Mạng yếu hoặc file lỗi</p>
-                 <button onClick={() => window.location.reload()} className="mt-3 text-xs bg-indigo-500 text-white px-4 py-2 rounded-xl font-bold shadow-lg hover:bg-indigo-600 transition-all">Thử tải lại xem</button>
+                 <button onClick={() => window.location.reload()} className="mt-3 text-xs bg-indigo-500 text-white px-4 py-2 rounded-xl font-bold">Thử tải lại</button>
              </div>
         </div>
      )
@@ -293,7 +298,6 @@ const Toy3D: React.FC<Toy3DProps> = ({ item, screenshotRef }) => {
                 <div className="bg-white/80 backdrop-blur-sm p-6 rounded-3xl border-2 border-red-100 shadow-sm">
                     <span className="text-4xl block mb-2">🤔</span>
                     <span className="text-red-500 font-bold block mb-1">Mô hình bị lỗi hiển thị</span>
-                    <p className="text-[10px] text-slate-400 mt-1">File quá nặng hoặc không tương thích</p>
                     <button onClick={() => window.location.reload()} className="mt-2 text-xs text-indigo-500 underline">Tải lại trang</button>
                 </div>
             </div>
