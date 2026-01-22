@@ -6,23 +6,10 @@ import { saveToLocalDB, loadFromLocalDB, deleteFromLocalDB } from './indexedDB';
 
 const COLLECTION_NAME = 'models';
 
-// Hàm làm sạch tên file: "Mô Hình T-Rex.gltf" -> "mo_hinh_t_rex.gltf"
+// Hàm làm sạch tên file cơ bản (chỉ dùng cho tên hiển thị nếu cần)
 const sanitizeFilename = (filename: string): string => {
-  const extension = filename.split('.').pop() || '';
-  const nameWithoutExt = filename.substring(0, filename.lastIndexOf('.'));
-  
-  // 1. Chuyển tiếng Việt có dấu thành không dấu
-  let cleanName = nameWithoutExt.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-  // 2. Chuyển thành chữ thường
-  cleanName = cleanName.toLowerCase();
-  // 3. Thay khoảng trắng và ký tự lạ bằng dấu gạch dưới
-  cleanName = cleanName.replace(/[^a-z0-9]/g, '_');
-  // 4. Xóa gạch dưới dư thừa (___ -> _)
-  cleanName = cleanName.replace(/_+/g, '_');
-  // 5. Cắt ngắn nếu quá dài (tối đa 30 ký tự)
-  if (cleanName.length > 30) cleanName = cleanName.substring(0, 30);
-
-  return `${cleanName}.${extension}`;
+  const clean = filename.toLowerCase().replace(/[^a-z0-9.]/g, '_');
+  return clean.length > 50 ? clean.substring(0, 50) : clean;
 };
 
 // Hàm phụ để tải file lên Storage với cơ chế retry đơn giản
@@ -64,50 +51,55 @@ export const saveModelToLibrary = async (
   }
 
   try {
+    // Tạo ID duy nhất dựa trên thời gian thực -> Đây sẽ là tên thư mục
     const uniqueId = item.id.startsWith('temp-') ? `item-${Date.now()}` : item.id; 
     const folderPath = `models/${uniqueId}`;
 
     // --- UPLOAD MÔ HÌNH CHÍNH ---
-    let mainFileName = 'scene.glb'; 
-    let originalMainName = 'scene.glb';
+    // Tìm tên file gốc để biết đuôi file (glb hay gltf)
+    let originalMainName = 'model.glb';
+    let mainExtension = 'glb';
 
     if (resources && modelBlobUrl) {
-        // Tìm tên file gốc nếu có
         const foundName = Object.keys(resources).find(key => resources[key] === modelBlobUrl);
         if (foundName) {
             originalMainName = foundName;
-            mainFileName = sanitizeFilename(foundName); // Làm sạch tên file
+            mainExtension = foundName.split('.').pop() || 'glb';
         }
     }
+    
+    // Tên file trên Cloud luôn ngắn gọn: "main_model.glb"
+    const cloudMainFileName = `main_model.${mainExtension}`;
 
     const modelRes = await fetch(modelBlobUrl);
     const modelBlob = await modelRes.blob();
-    // Lưu với tên sạch
-    const modelDownloadUrl = await uploadFile(`${folderPath}/${mainFileName}`, modelBlob);
+    const modelDownloadUrl = await uploadFile(`${folderPath}/${cloudMainFileName}`, modelBlob);
 
     // --- UPLOAD RESOURCES (BIN, TEXTURES RỜI) ---
-    // QUAN TRỌNG: Key của resourceUrls phải giữ là tên GỐC (originalMainName) 
-    // để file GLTF có thể tìm thấy nó. Nhưng file trên Cloud thì dùng tên SẠCH.
+    // QUAN TRỌNG: 
+    // - File upload lên Cloud sẽ có tên ngắn: res_0.png, res_1.bin
+    // - Firestore lưu map: { "Tên_Gốc_Dài_Ngoằng.png": "URL_Của_File_Ngắn" }
     const resourceUrls: { [key: string]: string } = {};
     
     if (resources) {
-      const resourcePromises = Object.entries(resources).map(async ([originalFilename, url]) => {
-        // Bỏ qua file chính vì đã upload ở trên, nhưng cần map lại URL nếu nó trùng
-        if (originalFilename === originalMainName) {
-             resourceUrls[originalFilename] = modelDownloadUrl;
-             return;
-        }
+      const entries = Object.entries(resources);
+      // Lọc ra các file resource (không phải file chính đã upload)
+      const resourceEntries = entries.filter(([originalName]) => originalName !== originalMainName);
 
+      const resourcePromises = resourceEntries.map(async ([originalFilename, url], index) => {
         if (url && url.startsWith('blob:')) {
            try {
              const resRes = await fetch(url);
              const resBlob = await resRes.blob();
              
-             // Làm sạch tên file trước khi upload lên Storage
-             const cleanName = sanitizeFilename(originalFilename);
-             const resUrl = await uploadFile(`${folderPath}/resources/${cleanName}`, resBlob);
+             // Lấy đuôi file
+             const ext = originalFilename.split('.').pop() || 'bin';
+             // Đặt tên ngắn gọn cho file trên cloud
+             const shortName = `res_${index}.${ext}`;
              
-             // Lưu vào map: Tên Gốc -> URL Mới (đã sạch)
+             const resUrl = await uploadFile(`${folderPath}/resources/${shortName}`, resBlob);
+             
+             // Map tên gốc -> URL mới
              resourceUrls[originalFilename] = resUrl;
            } catch (e) {
              console.warn(`Bỏ qua resource lỗi: ${originalFilename}`, e);
@@ -115,19 +107,29 @@ export const saveModelToLibrary = async (
         }
       });
       await Promise.all(resourcePromises);
+
+      // Map lại file chính (đã upload ở trên) vào resources map nếu cần
+      if (Object.keys(resources).includes(originalMainName)) {
+          resourceUrls[originalMainName] = modelDownloadUrl;
+      }
     }
 
     // --- UPLOAD TEXTURES (MAPPING) ---
+    // Tương tự: texture_0.jpg, texture_1.png
     const textureUrls: TextureMaps = {};
     if (textureMaps) {
-        const texturePromises = Object.entries(textureMaps).map(async ([key, url]) => {
+        const textureEntries = Object.entries(textureMaps);
+        const texturePromises = textureEntries.map(async ([key, url], index) => {
             if (url && url.startsWith('blob:')) {
                 try {
                     const tRes = await fetch(url);
                     const tBlob = await tRes.blob();
                     const ext = tBlob.type.includes('jpeg') ? 'jpg' : 'png';
-                    // Texture mapping dùng key cố định (map, normalMap...) nên tên file đơn giản
-                    const tUrl = await uploadFile(`${folderPath}/textures/${key}.${ext}`, tBlob);
+                    
+                    // Tên file ngắn gọn
+                    const shortName = `tex_${key}_${index}.${ext}`;
+                    
+                    const tUrl = await uploadFile(`${folderPath}/textures/${shortName}`, tBlob);
                     // @ts-ignore
                     textureUrls[key] = tUrl;
                 } catch (e) { console.warn(`Bỏ qua texture lỗi: ${key}`); }
@@ -137,12 +139,14 @@ export const saveModelToLibrary = async (
     }
 
     // --- LƯU DATABASE ---
+    // Dữ liệu lưu vào Firestore vẫn chứa map resourceUrls với Key là tên gốc
+    // Để Toy3D.tsx có thể tra cứu đúng khi load file GLTF.
     await addDoc(collection(db, COLLECTION_NAME), {
       name: factData.name,
       icon: item.icon,
       thumbnail: item.thumbnail || null,
       modelUrl: modelDownloadUrl,
-      resources: resourceUrls, // Map này giúp GLTF tìm đúng file dù tên trên cloud đã đổi
+      resources: resourceUrls, 
       textures: textureUrls,
       textureFlipY: item.textureFlipY || false,
       color: item.color,
@@ -156,7 +160,14 @@ export const saveModelToLibrary = async (
 
   } catch (error: any) {
     console.error("Lỗi Critical khi lưu Cloud:", error);
-    alert(`Lỗi khi đồng bộ: ${error.message}. Dữ liệu vẫn được lưu trên máy này.`);
+    // Nếu lỗi 'permission-denied' hoặc tương tự, thông báo rõ hơn
+    if (error.code === 'permission-denied') {
+        alert("Không có quyền lưu dữ liệu lên Cloud. Vui lòng kiểm tra Rules của Firebase.");
+    } else if (error.message && error.message.includes("Service firestore is not available")) {
+        alert("Lỗi kết nối dịch vụ Google. Vui lòng tải lại trang.");
+    } else {
+        alert(`Lỗi khi đồng bộ: ${error.message}. Dữ liệu vẫn được lưu trên máy này.`);
+    }
     throw error;
   }
 };

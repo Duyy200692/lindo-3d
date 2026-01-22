@@ -44,12 +44,18 @@ const usePatchedResources = (item: DiscoveryItem) => {
         const process = async () => {
             if (!item.modelUrl) return;
 
+            // Nếu là Blob URL (local) thì dùng luôn, không cần patch
+            if (item.modelUrl.startsWith('blob:')) {
+                 if (isMounted) setState({ patchedUrl: item.modelUrl, patchedTextures: item.textures || null, error: null });
+                 return;
+            }
+
             try {
                 // --- PHẦN 1: XỬ LÝ MODEL URL ---
                 let finalModelUrl = '';
                 
-                // 1. Tải file model gốc
-                const response = await fetch(item.modelUrl);
+                // 1. Tải file model gốc với chế độ cors
+                const response = await fetch(item.modelUrl, { mode: 'cors' });
                 if (!response.ok) throw new Error(`Lỗi tải model: ${response.status}`);
                 const mainBlob = await response.blob();
                 
@@ -78,15 +84,19 @@ const usePatchedResources = (item: DiscoveryItem) => {
                             if (!item.resources) return originalUri;
                             const cleanName = decodeURIComponent(originalUri).split('/').pop()?.replace(/[\?#].*$/, '') || '';
                             
-                            // Tìm key khớp trong resources
+                            // Tìm key khớp trong resources (So khớp thông minh hơn: không phân biệt hoa thường)
                             const resKey = Object.keys(item.resources).find(k => {
                                 const decodedKey = decodeURIComponent(k);
-                                return decodedKey.endsWith(cleanName) || decodedKey === cleanName || k.endsWith(cleanName);
+                                const kLower = decodedKey.toLowerCase();
+                                const nameLower = cleanName.toLowerCase();
+                                // Thử khớp chính xác hoặc khớp đuôi
+                                return decodedKey.endsWith(cleanName) || decodedKey === cleanName || k.endsWith(cleanName) ||
+                                       kLower.endsWith(nameLower) || kLower === nameLower;
                             });
                             
                             if (resKey && item.resources[resKey]) {
                                 try {
-                                    const rRes = await fetch(item.resources[resKey]);
+                                    const rRes = await fetch(item.resources[resKey], { mode: 'cors' });
                                     const rBlob = await rRes.blob();
                                     const rUrl = URL.createObjectURL(rBlob);
                                     generatedUrls.push(rUrl);
@@ -107,19 +117,16 @@ const usePatchedResources = (item: DiscoveryItem) => {
                 }
 
                 // --- PHẦN 2: XỬ LÝ TEXTURE MAPS (DA, MÀU...) ---
-                // Tải tất cả texture về blob để TextureLoader không bị lỗi URL dài
                 const finalTextures: TextureMaps = {};
                 if (item.textures) {
                     await Promise.all(Object.entries(item.textures).map(async ([key, url]) => {
                         if (url) {
                             try {
-                                // Nếu là blob: hoặc data: sẵn thì giữ nguyên
                                 if (url.startsWith('blob:') || url.startsWith('data:')) {
                                     // @ts-ignore
                                     finalTextures[key] = url;
                                 } else {
-                                    // Tải về blob
-                                    const tRes = await fetch(url);
+                                    const tRes = await fetch(url, { mode: 'cors' });
                                     const tBlob = await tRes.blob();
                                     const tUrl = URL.createObjectURL(tBlob);
                                     generatedUrls.push(tUrl);
@@ -144,8 +151,16 @@ const usePatchedResources = (item: DiscoveryItem) => {
                 }
 
             } catch (err: any) {
-                console.error("Critical Model Error:", err);
-                if (isMounted) setState(prev => ({ ...prev, error: err.message }));
+                console.warn("Patching failed, falling back to original URL:", err);
+                // QUAN TRỌNG: Fallback về URL gốc nếu xử lý blob thất bại
+                // Giúp file vẫn chạy được nếu lỗi do CORS hoặc parse JSON
+                if (isMounted) {
+                    setState({
+                        patchedUrl: item.modelUrl || null,
+                        patchedTextures: item.textures || null,
+                        error: null // Xóa lỗi để Canvas thử render bằng URL gốc
+                    });
+                }
             }
         };
 
@@ -185,7 +200,6 @@ const Model = ({ url, textures, textureFlipY = false }: { url: string, textures?
     // 2. Áp dụng Textures (đã được chuyển thành Blob URL ngắn gọn)
     if (textures && Object.keys(textures).length > 0) {
         const texLoader = new THREE.TextureLoader();
-        // CrossOrigin anonymous quan trọng cho texture
         texLoader.setCrossOrigin('anonymous');
 
         const applyMap = async () => {
@@ -194,13 +208,12 @@ const Model = ({ url, textures, textureFlipY = false }: { url: string, textures?
                  try {
                      const tex = await texLoader.loadAsync(val!);
                      tex.flipY = textureFlipY;
-                     // Map màu cần hệ màu sRGB, các map khác (normal, roughness) là Linear
                      if (key === 'map') tex.colorSpace = THREE.SRGBColorSpace;
                      else tex.colorSpace = THREE.NoColorSpace;
                      
                      scene.traverse((child: any) => {
                          if (child.isMesh && child.material) {
-                             const m = child.material; // Không clone ở đây để tiết kiệm mem, cẩn thận nếu dùng chung geometry
+                             const m = child.material;
                              if (key === 'map') m.map = tex;
                              if (key === 'normalMap') m.normalMap = tex;
                              if (key === 'roughnessMap') m.roughnessMap = tex;
@@ -280,13 +293,14 @@ const Toy3D: React.FC<Toy3DProps> = ({ item, screenshotRef }) => {
                 <div className="bg-white/80 backdrop-blur-sm p-6 rounded-3xl border-2 border-red-100 shadow-sm">
                     <span className="text-4xl block mb-2">🤔</span>
                     <span className="text-red-500 font-bold block mb-1">Mô hình bị lỗi hiển thị</span>
+                    <p className="text-[10px] text-slate-400 mt-1">File quá nặng hoặc không tương thích</p>
                     <button onClick={() => window.location.reload()} className="mt-2 text-xs text-indigo-500 underline">Tải lại trang</button>
                 </div>
             </div>
         }>
           <Canvas 
             shadows 
-            dpr={[1, 1.5]} // Giảm DPR tối đa xuống 1.5 để tăng hiệu năng trên mobile
+            dpr={[1, 1.5]} 
             camera={{ fov: 45, position: [0, 1, 6] }}
             gl={{ preserveDrawingBuffer: true, antialias: true }} 
           >
