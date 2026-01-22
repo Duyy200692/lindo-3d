@@ -5,7 +5,7 @@ import { fetchFunFact } from './services/geminiService';
 import { saveModelToLibrary, loadLibrary, deleteFromLibrary } from './utils/storage';
 import { db, auth } from './firebaseConfig';
 import { signInAnonymously, signInWithEmailAndPassword, signOut, onAuthStateChanged, User } from 'firebase/auth';
-import { Sparkles, ArrowLeft, Volume2, Rotate3d, Info, Upload, ArrowRight, Wand2, Save, Library, Trash2, Image as ImageIcon, Layers, Check, Zap, RefreshCw, Lightbulb, Wifi, WifiOff, Loader2, Eye, EyeOff, HardDrive, ShieldCheck, Lock, LogOut, X } from 'lucide-react';
+import { Sparkles, ArrowLeft, Volume2, Rotate3d, Info, Upload, ArrowRight, Wand2, Save, Library, Trash2, Image as ImageIcon, Layers, Check, Zap, RefreshCw, Lightbulb, Wifi, WifiOff, Loader2, Eye, EyeOff, HardDrive, ShieldCheck, Lock, LogOut, X, ShieldAlert } from 'lucide-react';
 
 export default function App() {
   const [mode, setMode] = useState<AppMode>(AppMode.GALLERY);
@@ -56,15 +56,20 @@ export default function App() {
 
       if (auth) {
           const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+              // Logic chuyển đổi user:
+              // Nếu đang chuyển từ Admin -> Logout -> Null -> Guest:
+              // isAppReady nên false cho đến khi có currentUser mới.
+              
               if (currentUser) {
                   console.log("User state:", currentUser.isAnonymous ? "Guest" : "Admin", currentUser.uid);
                   setUser(currentUser);
                   await loadSavedLibrary();
-                  setIsAppReady(true);
+                  setIsAppReady(true); // Chỉ sẵn sàng khi đã có User (Admin hoặc Guest)
               } else {
-                  // Nếu chưa đăng nhập gì cả, tự động đăng nhập Khách (Anonymous)
+                  // Nếu chưa đăng nhập gì cả (hoặc vừa logout), tự động đăng nhập Khách
                   console.log("Tự động đăng nhập Guest...");
                   await signInAnonymously(auth);
+                  // Không set isAppReady(true) ở đây, đợi vòng lặp sau khi currentUser có giá trị
               }
           });
           return () => unsubscribe();
@@ -99,22 +104,31 @@ export default function App() {
       e.preventDefault();
       setAuthError("");
       if (!auth) return;
+      
+      // Hiển thị loading khi đang đăng nhập
+      setIsAppReady(false);
+      
       try {
           await signInWithEmailAndPassword(auth, adminEmail, adminPassword);
           setShowLoginModal(false);
           setAdminEmail("");
           setAdminPassword("");
-          alert("Xin chào Admin! Bạn đã có toàn quyền kiểm soát.");
+          // onAuthStateChanged sẽ tự xử lý việc set isAppReady(true)
       } catch (err: any) {
           console.error(err);
+          setIsAppReady(true); // Trả lại trạng thái ready nếu lỗi
           setAuthError("Email hoặc mật khẩu không đúng.");
       }
   };
 
   const handleLogout = async () => {
       if (!auth) return;
-      await signOut(auth); // Khi signout, onAuthStateChanged sẽ tự chạy lại signInAnonymously
-      alert("Đã đăng xuất Admin. Trở về chế độ Trẻ em.");
+      // QUAN TRỌNG: Khóa màn hình lại để tránh lỗi 403 khi Toy3D cố tải trong lúc không có user
+      setIsAppReady(false); 
+      
+      await signOut(auth); 
+      // Sau khi signout, onAuthStateChanged sẽ tự động chạy signInAnonymously
+      // Khi signInAnonymously xong, nó sẽ set isAppReady(true) lại.
   };
 
   const handleBack = () => {
@@ -394,8 +408,8 @@ export default function App() {
       <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 text-center">
         <div className="bg-white p-10 rounded-[40px] shadow-xl border border-slate-100 animate-float">
           <Rotate3d className="w-16 h-16 text-indigo-500 mx-auto mb-4 animate-spin-fast" />
-          <h2 className="text-2xl font-black text-slate-800 mb-2">Đang khởi động...</h2>
-          <p className="text-slate-500">Kiddo đang kết nối với vệ tinh...</p>
+          <h2 className="text-2xl font-black text-slate-800 mb-2">Đang kết nối...</h2>
+          <p className="text-slate-500">{user ? "Đang tải dữ liệu..." : "Đang xác thực..."}</p>
           <div className="mt-8 flex justify-center gap-1">
              <div className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" style={{animationDelay: '0s'}}></div>
              <div className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></div>
@@ -407,10 +421,18 @@ export default function App() {
   }
 
   return (
-    <div className="h-screen bg-slate-50 text-slate-800 relative overflow-hidden font-sans flex flex-col">
+    <div className={`h-screen bg-slate-50 text-slate-800 relative overflow-hidden font-sans flex flex-col ${isAdmin ? 'border-4 border-red-400' : ''}`}>
       <input type="file" ref={fileInputRef} onChange={handleModelFileChange} accept=".glb,.gltf,.bin,.png,.jpg,.jpeg" multiple className="hidden" />
       <input type="file" ref={textureInputRef} onChange={handleTextureFileChange} accept="image/png,image/jpeg,image/jpg" className="hidden" />
       <input type="file" ref={multiTextureInputRef} onChange={handleMultiTextureChange} accept="image/png,image/jpeg,image/jpg" multiple className="hidden" />
+
+      {/* ADMIN BANNER */}
+      {isAdmin && (
+          <div className="bg-red-500 text-white text-[10px] font-bold text-center py-1 uppercase tracking-widest flex items-center justify-center gap-2 z-50 shadow-md relative">
+              <ShieldAlert className="w-3 h-3" />
+              Chế độ Quản Trị Viên (Full Access)
+          </div>
+      )}
 
       {/* BACKGROUND EFFECTS */}
       <div className="absolute top-[-10%] left-[-10%] w-[60%] h-[60%] bg-blue-200 rounded-full blur-3xl opacity-30 z-0 animate-pulse pointer-events-none"></div>
@@ -429,7 +451,7 @@ export default function App() {
                 {isAdmin ? (
                     <button 
                         onClick={handleLogout}
-                        className="p-2 rounded-full border border-red-200 bg-red-50 text-red-500 hover:bg-red-100 active:scale-95 transition-all"
+                        className="p-2 rounded-full border border-red-200 bg-white text-red-500 hover:bg-red-50 active:scale-95 transition-all shadow-sm"
                         title="Đăng xuất Admin"
                     >
                         <LogOut className="w-4 h-4" />
@@ -560,7 +582,7 @@ export default function App() {
                     <form onSubmit={handleAdminLogin} className="space-y-4">
                         <div>
                             <label className="block text-xs font-bold text-slate-500 mb-1 ml-1">Email</label>
-                            <input type="email" value={adminEmail} onChange={(e) => setAdminEmail(e.target.value)} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:border-red-500 focus:ring-2 focus:ring-red-100 outline-none" required />
+                            <input autoFocus type="email" value={adminEmail} onChange={(e) => setAdminEmail(e.target.value)} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:border-red-500 focus:ring-2 focus:ring-red-100 outline-none" required />
                         </div>
                         <div>
                             <label className="block text-xs font-bold text-slate-500 mb-1 ml-1">Mật khẩu</label>
