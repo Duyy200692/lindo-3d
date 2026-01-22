@@ -17,6 +17,7 @@ export default function App() {
   const [isOnline, setIsOnline] = useState(true);
   const [isAppReady, setIsAppReady] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [loadingStatus, setLoadingStatus] = useState("Đang khởi động...");
   
   // Auth & Admin State
   const [user, setUser] = useState<User | null>(null);
@@ -49,6 +50,15 @@ export default function App() {
   const exportRef = useRef<() => Promise<Blob | null>>(() => Promise.resolve(null));
 
   useEffect(() => {
+    // 1. Safety Timeout: Nếu sau 7s mà chưa ready, cưỡng chế vào App (chế độ Local)
+    const safetyTimer = setTimeout(() => {
+        if (!isAppReady) {
+            console.warn("Firebase phản hồi chậm, buộc vào App...");
+            setLoadingStatus("Đang vào chế độ Offline...");
+            setIsAppReady(true);
+        }
+    }, 7000);
+
     const initApp = async () => {
       setIsOnline(navigator.onLine);
       window.addEventListener('online', () => setIsOnline(true));
@@ -56,24 +66,29 @@ export default function App() {
 
       if (auth) {
           const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-              // Logic chuyển đổi user:
-              // Nếu đang chuyển từ Admin -> Logout -> Null -> Guest:
-              // isAppReady nên false cho đến khi có currentUser mới.
-              
               if (currentUser) {
                   console.log("User state:", currentUser.isAnonymous ? "Guest" : "Admin", currentUser.uid);
                   setUser(currentUser);
-                  await loadSavedLibrary();
-                  setIsAppReady(true); // Chỉ sẵn sàng khi đã có User (Admin hoặc Guest)
+                  // Khi đã có user, vào app ngay, việc load data chạy ngầm
+                  setIsAppReady(true); 
+                  loadSavedLibrary();
               } else {
-                  // Nếu chưa đăng nhập gì cả (hoặc vừa logout), tự động đăng nhập Khách
-                  console.log("Tự động đăng nhập Guest...");
-                  await signInAnonymously(auth);
-                  // Không set isAppReady(true) ở đây, đợi vòng lặp sau khi currentUser có giá trị
+                  // Nếu chưa đăng nhập, thử đăng nhập ẩn danh
+                  setLoadingStatus("Đang kết nối máy chủ...");
+                  try {
+                    await signInAnonymously(auth);
+                    // Sau khi await này xong, onAuthStateChanged sẽ trigger lại với currentUser != null
+                  } catch (err) {
+                      console.error("Lỗi đăng nhập ẩn danh:", err);
+                      // Nếu lỗi đăng nhập (mất mạng), vẫn cho vào app để dùng Local
+                      setIsAppReady(true);
+                      loadSavedLibrary(); 
+                  }
               }
           });
           return () => unsubscribe();
       } else {
+          // Không có auth config (chạy local hoàn toàn)
           await loadSavedLibrary();
           setIsAppReady(true);
       }
@@ -82,6 +97,7 @@ export default function App() {
     initApp();
 
     return () => {
+      clearTimeout(safetyTimer);
       window.removeEventListener('online', () => setIsOnline(true));
       window.removeEventListener('offline', () => setIsOnline(false));
       window.speechSynthesis.cancel();
@@ -89,6 +105,7 @@ export default function App() {
   }, []);
 
   const loadSavedLibrary = async () => {
+    if (isRefreshing) return;
     setIsRefreshing(true);
     try {
       const library = await loadLibrary();
@@ -105,7 +122,8 @@ export default function App() {
       setAuthError("");
       if (!auth) return;
       
-      // Hiển thị loading khi đang đăng nhập
+      setLoadingStatus("Đang đăng nhập Admin...");
+      // Tạm khóa app để xử lý chuyển đổi token
       setIsAppReady(false);
       
       try {
@@ -123,12 +141,11 @@ export default function App() {
 
   const handleLogout = async () => {
       if (!auth) return;
-      // QUAN TRỌNG: Khóa màn hình lại để tránh lỗi 403 khi Toy3D cố tải trong lúc không có user
+      setLoadingStatus("Đang đăng xuất...");
       setIsAppReady(false); 
       
       await signOut(auth); 
       // Sau khi signout, onAuthStateChanged sẽ tự động chạy signInAnonymously
-      // Khi signInAnonymously xong, nó sẽ set isAppReady(true) lại.
   };
 
   const handleBack = () => {
@@ -409,12 +426,13 @@ export default function App() {
         <div className="bg-white p-10 rounded-[40px] shadow-xl border border-slate-100 animate-float">
           <Rotate3d className="w-16 h-16 text-indigo-500 mx-auto mb-4 animate-spin-fast" />
           <h2 className="text-2xl font-black text-slate-800 mb-2">Đang kết nối...</h2>
-          <p className="text-slate-500">{user ? "Đang tải dữ liệu..." : "Đang xác thực..."}</p>
+          <p className="text-slate-500">{loadingStatus}</p>
           <div className="mt-8 flex justify-center gap-1">
              <div className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" style={{animationDelay: '0s'}}></div>
              <div className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></div>
              <div className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" style={{animationDelay: '0.4s'}}></div>
           </div>
+          <p className="text-xs text-slate-300 mt-6">(Nếu lâu quá, app sẽ tự vào chế độ Offline)</p>
         </div>
       </div>
     );
