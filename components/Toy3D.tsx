@@ -102,17 +102,52 @@ const usePatchedResources = (item: DiscoveryItem) => {
                     finalModelUrl = URL.createObjectURL(mainBlob);
                     generatedUrls.push(finalModelUrl);
                 } else {
-                    // Nếu là GLTF (JSON), cần xử lý như cũ
+                    // Nếu là GLTF (JSON), cần xử lý PATCH RESOURCE
                     const text = await mainBlob.text();
                     let json;
                     try { json = JSON.parse(text); } catch (e) { 
+                        // Nếu không parse được JSON, cứ thử load như file thường
                         finalModelUrl = URL.createObjectURL(mainBlob);
                         generatedUrls.push(finalModelUrl);
                     }
 
                     if (json) {
-                        // ... (Logic patch resource cũ nếu cần) ...
-                        // Nhưng thường với Cloud GLTF đã đóng gói, bước này ít khi chạy
+                        // === LOGIC PATCH RESOURCE QUAN TRỌNG ===
+                        // Nhiệm vụ: Thay thế đường dẫn "scene.bin" trong json thành "blob:http://..."
+                        
+                        const getResourceUrl = (uri: string) => {
+                            if (!item.resources) return uri;
+                            // 1. Tìm chính xác tên file (ví dụ: "scene.bin")
+                            if (item.resources[uri]) return item.resources[uri];
+                            
+                            // 2. Tìm theo tên file gốc nếu uri có chứa đường dẫn (ví dụ: "buffers/scene.bin" -> "scene.bin")
+                            const basename = uri.split('/').pop();
+                            if (basename && item.resources[basename]) return item.resources[basename];
+                            
+                            // 3. Giải mã URL (phòng trường hợp tên file có ký tự đặc biệt)
+                            try {
+                                const decoded = decodeURIComponent(basename || uri);
+                                if (item.resources[decoded]) return item.resources[decoded];
+                            } catch(e) {}
+                            
+                            return uri;
+                        }
+
+                        // Patch Buffers (.bin)
+                        if (json.buffers) {
+                            json.buffers.forEach((b: any) => {
+                                if (b.uri) b.uri = getResourceUrl(b.uri);
+                            });
+                        }
+                        
+                        // Patch Images (Texture nội bộ)
+                        if (json.images) {
+                            json.images.forEach((img: any) => {
+                                if (img.uri) img.uri = getResourceUrl(img.uri);
+                            });
+                        }
+
+                        // Tạo Blob mới từ JSON đã sửa
                         const gltfBlob = new Blob([JSON.stringify(json)], { type: 'application/json' });
                         finalModelUrl = URL.createObjectURL(gltfBlob);
                         generatedUrls.push(finalModelUrl);
@@ -153,16 +188,21 @@ const usePatchedResources = (item: DiscoveryItem) => {
 
 const Model = ({ url, textures, textureFlipY = false }: { url: string, textures?: TextureMaps, textureFlipY?: boolean }) => {
   const group = useRef<THREE.Group>(null);
+  
+  // Sử dụng useGLTF với cấu hình an toàn
   const { scene, animations } = useGLTF(url, true, true, (loader) => {
      const dracoLoader = new DRACOLoader();
      dracoLoader.setDecoderPath(DRACO_URL);
      (loader as unknown as GLTFLoader).setDRACOLoader(dracoLoader);
   });
+  
   const { actions } = useAnimations(animations, group);
 
   useEffect(() => {
+    // Chạy animation nếu có
     if (actions) Object.values(actions).forEach((action: any) => { try { action?.reset().fadeIn(0.5).play(); } catch(e) {} });
 
+    // Áp dụng textures thủ công nếu người dùng upload riêng
     if (textures && Object.keys(textures).length > 0) {
         const texLoader = new THREE.TextureLoader();
         texLoader.setCrossOrigin('anonymous'); 
@@ -187,7 +227,7 @@ const Model = ({ url, textures, textureFlipY = false }: { url: string, textures?
                              m.needsUpdate = true;
                          }
                      });
-                 } catch (e) { }
+                 } catch (e) { console.warn("Lỗi load texture:", key, e); }
              }
         };
         applyMap();
@@ -229,11 +269,13 @@ const Toy3D: React.FC<Toy3DProps> = ({ item, screenshotRef, exportRef }) => {
         <ModelErrorBoundary fallback={
             <div className="flex flex-col items-center justify-center h-full p-4 text-center">
                 <span className="text-4xl mb-2">😵</span>
-                <span className="text-red-500 font-bold">Lỗi hiển thị 3D</span>
+                <span className="text-red-500 font-bold">File lỗi hoặc không tương thích</span>
+                <p className="text-xs text-slate-400 mt-1">Hãy chắc chắn bé đã chọn đủ file .gltf và .bin</p>
                 <button onClick={() => window.location.reload()} className="mt-2 text-xs underline">Tải lại</button>
             </div>
         }>
           <Canvas shadows dpr={[1, 1.5]} camera={{ fov: 45, position: [0, 1, 6] }} gl={{ preserveDrawingBuffer: true, antialias: true }}>
+            <color attach="background" args={['#f1f5f9']} />
             <SceneHandler captureRef={screenshotRef} exportRef={exportRef} />
             <Suspense fallback={null}>
               <Center>
