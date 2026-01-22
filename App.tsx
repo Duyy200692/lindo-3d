@@ -26,10 +26,7 @@ export default function App() {
   const [adminPassword, setAdminPassword] = useState("");
   const [authError, setAuthError] = useState("");
 
-  // Kiểm tra xem user hiện tại có phải là Admin thật (đã đăng nhập email) hay không
   const isAdmin = user && !user.isAnonymous;
-  
-  // State for visibility toggle
   const [showInfo, setShowInfo] = useState(true);
 
   // State for the "Name Input" step
@@ -50,7 +47,6 @@ export default function App() {
   const exportRef = useRef<() => Promise<Blob | null>>(() => Promise.resolve(null));
 
   useEffect(() => {
-    // 1. Safety Timeout: Nếu sau 7s mà chưa ready, cưỡng chế vào App (chế độ Local)
     const safetyTimer = setTimeout(() => {
         if (!isAppReady) {
             console.warn("Firebase phản hồi chậm, buộc vào App...");
@@ -69,18 +65,14 @@ export default function App() {
               if (currentUser) {
                   console.log("User state:", currentUser.isAnonymous ? "Guest" : "Admin", currentUser.uid);
                   setUser(currentUser);
-                  // Khi đã có user, vào app ngay, việc load data chạy ngầm
                   setIsAppReady(true); 
                   loadSavedLibrary();
               } else {
-                  // Nếu chưa đăng nhập, thử đăng nhập ẩn danh
                   setLoadingStatus("Đang kết nối máy chủ...");
                   try {
                     await signInAnonymously(auth);
-                    // Sau khi await này xong, onAuthStateChanged sẽ trigger lại với currentUser != null
                   } catch (err) {
                       console.error("Lỗi đăng nhập ẩn danh:", err);
-                      // Nếu lỗi đăng nhập (mất mạng), vẫn cho vào app để dùng Local
                       setIsAppReady(true);
                       loadSavedLibrary(); 
                   }
@@ -88,7 +80,6 @@ export default function App() {
           });
           return () => unsubscribe();
       } else {
-          // Không có auth config (chạy local hoàn toàn)
           await loadSavedLibrary();
           setIsAppReady(true);
       }
@@ -123,7 +114,6 @@ export default function App() {
       if (!auth) return;
       
       setLoadingStatus("Đang đăng nhập Admin...");
-      // Tạm khóa app để xử lý chuyển đổi token
       setIsAppReady(false);
       
       try {
@@ -131,10 +121,9 @@ export default function App() {
           setShowLoginModal(false);
           setAdminEmail("");
           setAdminPassword("");
-          // onAuthStateChanged sẽ tự xử lý việc set isAppReady(true)
       } catch (err: any) {
           console.error(err);
-          setIsAppReady(true); // Trả lại trạng thái ready nếu lỗi
+          setIsAppReady(true);
           setAuthError("Email hoặc mật khẩu không đúng.");
       }
   };
@@ -143,9 +132,7 @@ export default function App() {
       if (!auth) return;
       setLoadingStatus("Đang đăng xuất...");
       setIsAppReady(false); 
-      
       await signOut(auth); 
-      // Sau khi signout, onAuthStateChanged sẽ tự động chạy signInAnonymously
   };
 
   const handleBack = () => {
@@ -198,6 +185,7 @@ export default function App() {
 
     const resources: { [key: string]: string } = {};
     fileArray.forEach(f => {
+      // Lưu ý: createObjectURL là tạm thời, browser sẽ quản lý
       resources[f.name] = URL.createObjectURL(f);
     });
 
@@ -255,10 +243,6 @@ export default function App() {
         else if (lowerName.includes('rough') || lowerName.includes('rgh')) {
             newTextures.roughnessMap = objectUrl;
             detectedList.push("Độ nhám (Roughness)");
-            if (lowerName.includes('met') || lowerName.includes('mtl')) {
-                newTextures.metalnessMap = objectUrl;
-                detectedList.push("Kim loại (Metallic)");
-            }
         } 
         else if (lowerName.includes('met') || lowerName.includes('mtl') || lowerName.includes('metal')) {
             newTextures.metalnessMap = objectUrl;
@@ -295,7 +279,7 @@ export default function App() {
       icon: '✨',
       modelUrl: tempModelUrl,
       textures: tempTextures, 
-      resources: tempResources,
+      resources: tempResources, // Pass danh sách resource xuống để Toy3D patch
       textureFlipY: tempFlipY, 
       color: 'bg-indigo-400',
       modelType: 'model',
@@ -326,29 +310,36 @@ export default function App() {
     if (!selectedItem || !factData || !selectedItem.modelUrl) return;
     setIsSaving(true);
     
+    // 1. Chụp ảnh Thumbnail
     let thumbnailData = undefined;
     if (screenshotRef.current) {
         const captured = screenshotRef.current();
         if (captured) thumbnailData = captured;
     }
 
+    // 2. Tạo File GLB hoàn chỉnh
     let glbBlobToUpload: Blob | null = null;
     
-    if (selectedItem.modelUrl.startsWith('blob:') && exportRef.current) {
-        console.log("Đang đóng gói lại mô hình từ Scene...");
+    // Nếu đang ở màn hình Viewer, hãy dùng Toy3D để export toàn bộ scene thành 1 file .glb duy nhất
+    // Đây là bước quan trọng nhất để sửa lỗi "thiếu file .bin"
+    if (exportRef.current) {
+        console.log("Đang đóng gói mô hình (gộp .bin + textures)...");
         try {
             glbBlobToUpload = await exportRef.current();
         } catch (e) {
-            console.warn("Lỗi export scene, sẽ dùng file gốc:", e);
+            console.error("Lỗi đóng gói scene:", e);
         }
     }
 
+    // Fallback: Nếu không export được (hiếm khi), thử tải file gốc
+    // Lưu ý: Cách này sẽ hỏng nếu file gốc là .gltf rời rạc
     if (!glbBlobToUpload) {
          try {
+             console.warn("Export thất bại, đang thử dùng file gốc (có rủi ro)...");
              const res = await fetch(selectedItem.modelUrl);
              glbBlobToUpload = await res.blob();
          } catch(e) {
-             alert("Không thể đọc file mô hình.");
+             alert("Không thể đọc file mô hình để lưu.");
              setIsSaving(false);
              return;
          }
@@ -358,10 +349,11 @@ export default function App() {
 
     try {
       await saveModelToLibrary(itemToSave, factData, glbBlobToUpload);
-      alert("Đã lưu thành công!");
+      alert("Đã lưu thành công! Bé có thể xem lại bất cứ lúc nào.");
       setIsSaving(false);
-    } catch (e) {
-      alert("Có lỗi khi lưu. Kiểm tra kết nối mạng nhé!");
+    } catch (e: any) {
+      console.error(e);
+      alert(`Có lỗi khi lưu: ${e.message || "Vui lòng kiểm tra mạng"}`);
       setIsSaving(false);
     }
   };
