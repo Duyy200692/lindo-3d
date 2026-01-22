@@ -1,5 +1,5 @@
 import { initializeApp, getApp, getApps, FirebaseApp } from "firebase/app";
-import { getFirestore, Firestore } from "firebase/firestore";
+import { getFirestore, Firestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from "firebase/firestore";
 import { getStorage, FirebaseStorage } from "firebase/storage";
 import { getAuth, Auth } from "firebase/auth";
 
@@ -24,11 +24,17 @@ try {
         app = getApp();
     }
 
-    db = getFirestore(app);
+    // Cấu hình Firestore với cache offline bền vững (IndexedDB)
+    db = initializeFirestore(app, {
+        localCache: persistentLocalCache({
+             tabManager: persistentMultipleTabManager() 
+        })
+    });
+    
     storage = getStorage(app);
     auth = getAuth(app);
     
-    console.log("Firebase đã kết nối!");
+    console.log("Firebase đã kết nối (Offline Persistence Enabled)!");
 } catch (error) {
     console.error("Lỗi cấu hình Firebase:", error);
 }

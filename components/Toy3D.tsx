@@ -1,7 +1,7 @@
-import React, { useRef, useState, useEffect, Suspense, ReactNode } from 'react';
-import { DiscoveryItem, TextureMaps } from '../types';
+import React, { useRef, useState, useEffect, Suspense } from 'react';
+import { DiscoveryItem } from '../types';
 import { Canvas, useThree, useFrame } from '@react-three/fiber';
-import { OrbitControls, useAnimations, Environment, Center, ContactShadows, Resize, Html } from '@react-three/drei';
+import { OrbitControls, useAnimations, Environment, Center, ContactShadows, Resize } from '@react-three/drei';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader';
@@ -15,7 +15,6 @@ interface Toy3DProps {
 
 const DRACO_URL = 'https://www.gstatic.com/draco/versioned/decoders/1.5.7/';
 
-// Component xử lý chụp ảnh và xuất file
 const SceneHandler = ({ 
     captureRef, 
     exportRef,
@@ -48,7 +47,6 @@ const SceneHandler = ({
         if (exportRef) {
             exportRef.current = async () => {
                 gl.render(scene, camera);
-                
                 return new Promise((resolve, reject) => {
                     const exporter = new GLTFExporter();
                     try {
@@ -57,25 +55,19 @@ const SceneHandler = ({
                             (result) => {
                                 if (result instanceof ArrayBuffer) {
                                     if (result.byteLength === 0) {
-                                        reject(new Error("File export rỗng (0 bytes)"));
+                                        reject(new Error("File export rỗng"));
                                         return;
                                     }
                                     resolve(new Blob([result], { type: 'model/gltf-binary' }));
                                 } else {
-                                    // Fallback: Chuyển JSON thành Blob
-                                    const jsonStr = JSON.stringify(result);
-                                    if (jsonStr.length < 50) { // Check sơ bộ nếu JSON quá ngắn
-                                         reject(new Error("File export JSON không hợp lệ"));
-                                         return;
-                                    }
-                                    resolve(new Blob([jsonStr], { type: 'application/json' }));
+                                    resolve(new Blob([JSON.stringify(result)], { type: 'application/json' }));
                                 }
                             },
                             (error) => reject(error),
                             { 
                                 binary: true, 
                                 onlyVisible: true,
-                                embedImages: true, // BẮT BUỘC: Nhúng texture vào file
+                                embedImages: true,
                                 maxTextureSize: 2048,
                                 animations: scene.animations 
                             }
@@ -89,107 +81,109 @@ const SceneHandler = ({
     return null;
 };
 
-// Component Model thủ công để kiểm soát Loader tốt hơn
+// Component Model thủ công với cơ chế "Pre-Fetch Blob"
 const ManualModel = ({ item, onLoad, onError }: { item: DiscoveryItem, onLoad: (scene: THREE.Group, animations: any[]) => void, onError: (err: any) => void }) => {
     const group = useRef<THREE.Group>(null);
     const [scene, setScene] = useState<THREE.Group | null>(null);
     const [animations, setAnimations] = useState<any[]>([]);
-    
     const { actions } = useAnimations(animations, group);
 
     useEffect(() => {
         if (!item.modelUrl) return;
-
         let isMounted = true;
-        
-        // Setup Loading Manager
-        const manager = new THREE.LoadingManager();
-        
-        // URL MODIFIER: Trái tim của việc fix lỗi loading
-        manager.setURLModifier((url) => {
-            // Chuẩn hóa tên file
-            const filenameRaw = url.replace(/^.*[\\\/]/, '');
-            const filename = decodeURIComponent(filenameRaw);
-            
-            // Nếu có trong danh sách resources (file .bin, texture user upload), dùng Blob URL đó
-            if (item.resources && item.resources[filename]) {
-                return item.resources[filename];
-            }
-            return url;
-        });
+        let objectUrlToRevoke: string | null = null;
 
-        // Setup Loader
-        const loader = new GLTFLoader(manager);
-        const dracoLoader = new DRACOLoader();
-        dracoLoader.setDecoderPath(DRACO_URL);
-        loader.setDRACOLoader(dracoLoader);
+        const loadModel = async () => {
+            try {
+                // BƯỚC 1: Dùng fetch để tải file về dưới dạng Blob
+                // Cách này giúp bypass lỗi 403 do thiếu header hoặc token bị mất
+                const response = await fetch(item.modelUrl!, { mode: 'cors' });
+                if (!response.ok) throw new Error(`Lỗi tải file (${response.status}): ${response.statusText}`);
+                
+                const blob = await response.blob();
+                objectUrlToRevoke = URL.createObjectURL(blob); // Tạo đường dẫn nội bộ an toàn
 
-        loader.load(
-            item.modelUrl,
-            (gltf) => {
-                if (!isMounted) return;
-                setScene(gltf.scene);
-                setAnimations(gltf.animations);
-                onLoad(gltf.scene, gltf.animations);
-            },
-            undefined,
-            (err) => {
+                // BƯỚC 2: Cấu hình Loader để đọc đường dẫn nội bộ đó
+                const manager = new THREE.LoadingManager();
+                manager.setURLModifier((url) => {
+                    const filenameRaw = url.replace(/^.*[\\\/]/, '');
+                    const filename = decodeURIComponent(filenameRaw);
+                    if (item.resources && item.resources[filename]) return item.resources[filename];
+                    return url;
+                });
+
+                const loader = new GLTFLoader(manager);
+                loader.setCrossOrigin('anonymous'); // Quan trọng cho texture
+                
+                const dracoLoader = new DRACOLoader();
+                dracoLoader.setDecoderPath(DRACO_URL);
+                loader.setDRACOLoader(dracoLoader);
+
+                loader.load(
+                    objectUrlToRevoke,
+                    (gltf) => {
+                        if (!isMounted) return;
+                        setScene(gltf.scene);
+                        setAnimations(gltf.animations);
+                        onLoad(gltf.scene, gltf.animations);
+                    },
+                    undefined,
+                    (err) => {
+                        if (isMounted) {
+                            console.error("Lỗi GLTFLoader parse:", err);
+                            onError(err);
+                        }
+                    }
+                );
+            } catch (err: any) {
                 if (isMounted) {
-                    console.error("Lỗi GLTFLoader:", err);
+                    console.error("Lỗi Fetch:", err);
                     onError(err);
                 }
             }
-        );
+        };
 
-        return () => { isMounted = false; };
-    }, [item.modelUrl, item.resources]); // Chạy lại khi URL hoặc resources thay đổi
+        loadModel();
 
-    // Xử lý Textures & Animations khi Scene đã load
+        return () => { 
+            isMounted = false;
+            if (objectUrlToRevoke) URL.revokeObjectURL(objectUrlToRevoke);
+        };
+    }, [item.modelUrl, item.resources]); 
+
+    // Xử lý Textures (Giữ nguyên logic cũ)
     useEffect(() => {
-        if (!scene) return;
+        if (!scene || !item.textures) return;
+        if (actions) Object.values(actions).forEach((a:any) => a?.reset().fadeIn(0.5).play());
 
-        // Play animations
-        if (actions) {
-             Object.values(actions).forEach((action: any) => {
-                 try { action?.reset().fadeIn(0.5).play(); } catch(e) {}
-             });
-        }
-
-        // Apply Custom Textures
-        if (item.textures && Object.keys(item.textures).length > 0) {
-            const texLoader = new THREE.TextureLoader();
-            texLoader.setCrossOrigin('anonymous');
-            
-            const apply = async () => {
-                const entries = Object.entries(item.textures!).filter(([_, v]) => !!v);
-                for (const [key, val] of entries) {
-                    try {
-                        const tex = await texLoader.loadAsync(val!);
-                        tex.flipY = !!item.textureFlipY;
-                        tex.colorSpace = (key === 'map') ? THREE.SRGBColorSpace : THREE.NoColorSpace;
-
-                        scene.traverse((child: any) => {
-                            if (child.isMesh && child.material) {
-                                // Clone material để tránh side-effect nếu dùng chung
-                                // child.material = child.material.clone(); 
-                                if (key === 'map') child.material.map = tex;
-                                if (key === 'normalMap') child.material.normalMap = tex;
-                                if (key === 'roughnessMap') child.material.roughnessMap = tex;
-                                if (key === 'metalnessMap') child.material.metalnessMap = tex;
-                                if (key === 'aoMap') child.material.aoMap = tex;
-                                if (key === 'emissiveMap') child.material.emissiveMap = tex;
-                                child.material.needsUpdate = true;
-                            }
-                        });
-                    } catch (e) { console.warn("Lỗi texture:", key); }
-                }
-            };
-            apply();
-        }
+        const texLoader = new THREE.TextureLoader();
+        texLoader.setCrossOrigin('anonymous');
+        
+        const applyTextures = async () => {
+            for (const [key, val] of Object.entries(item.textures!)) {
+                if (!val) continue;
+                try {
+                    const tex = await texLoader.loadAsync(val);
+                    tex.flipY = !!item.textureFlipY;
+                    tex.colorSpace = (key === 'map') ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+                    scene.traverse((child: any) => {
+                        if (child.isMesh && child.material) {
+                            if (key === 'map') child.material.map = tex;
+                            else if (key === 'normalMap') child.material.normalMap = tex;
+                            else if (key === 'roughnessMap') child.material.roughnessMap = tex;
+                            else if (key === 'metalnessMap') child.material.metalnessMap = tex;
+                            else if (key === 'aoMap') child.material.aoMap = tex;
+                            else if (key === 'emissiveMap') child.material.emissiveMap = tex;
+                            child.material.needsUpdate = true;
+                        }
+                    });
+                } catch(e) {}
+            }
+        };
+        applyTextures();
     }, [scene, actions, item.textures, item.textureFlipY]);
 
     if (!scene) return null;
-
     // @ts-ignore
     return <group ref={group} dispose={null}><primitive object={scene} /></group>;
 };
@@ -198,11 +192,7 @@ const Toy3D: React.FC<Toy3DProps> = ({ item, screenshotRef, exportRef }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Reset state khi item thay đổi
-  useEffect(() => {
-      setLoading(true);
-      setError(null);
-  }, [item.id]);
+  useEffect(() => { setLoading(true); setError(null); }, [item.id]);
 
   if (!item.modelUrl) return <div className="flex items-center justify-center w-full h-full text-6xl">{item.icon}</div>;
 
@@ -223,30 +213,18 @@ const Toy3D: React.FC<Toy3DProps> = ({ item, screenshotRef, exportRef }) => {
               <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
                   <div className="flex flex-col items-center">
                     <div className="w-10 h-10 border-4 border-indigo-200 border-t-indigo-500 rounded-full animate-spin"></div>
-                    <span className="text-xs text-indigo-500 font-bold mt-2">Đang mở hộp...</span>
+                    <span className="text-xs text-indigo-500 font-bold mt-2">Đang tải về máy...</span>
                   </div>
               </div>
           )}
           
           <Canvas shadows dpr={[1, 1.5]} camera={{ fov: 45, position: [0, 1, 6] }} gl={{ preserveDrawingBuffer: true, antialias: true }}>
             <color attach="background" args={['#f1f5f9']} />
-            <SceneHandler 
-                captureRef={screenshotRef} 
-                exportRef={exportRef} 
-                onReady={() => console.log("Scene ready")} 
-            />
-            
+            <SceneHandler captureRef={screenshotRef} exportRef={exportRef} onReady={() => {}} />
             <Suspense fallback={null}>
               <Center onCentered={() => setLoading(false)}>
                 <Resize scale={4}>
-                  <ManualModel 
-                    item={item} 
-                    onLoad={() => setLoading(false)} 
-                    onError={(e) => {
-                        setLoading(false);
-                        setError(e.message || "Lỗi không xác định");
-                    }} 
-                  />
+                  <ManualModel item={item} onLoad={() => setLoading(false)} onError={(e) => { setLoading(false); setError(e.message); }} />
                 </Resize>
               </Center>
               <ContactShadows position={[0, -2.2, 0]} opacity={0.4} scale={10} blur={2.5} far={4} color="#000000" />
