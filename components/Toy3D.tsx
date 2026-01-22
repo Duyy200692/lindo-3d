@@ -6,6 +6,8 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter';
+import { ref, getBlob } from 'firebase/storage'; // Import SDK Storage
+import { storage } from '../firebaseConfig'; // Import instance storage
 
 interface Toy3DProps {
   item: DiscoveryItem;
@@ -81,7 +83,7 @@ const SceneHandler = ({
     return null;
 };
 
-// Component Model thủ công với cơ chế "Pre-Fetch Blob"
+// Component Model thủ công với cơ chế "Fallback Kép" (Fetch -> Firebase SDK)
 const ManualModel = ({ item, onLoad, onError }: { item: DiscoveryItem, onLoad: (scene: THREE.Group, animations: any[]) => void, onError: (err: any) => void }) => {
     const group = useRef<THREE.Group>(null);
     const [scene, setScene] = useState<THREE.Group | null>(null);
@@ -95,25 +97,54 @@ const ManualModel = ({ item, onLoad, onError }: { item: DiscoveryItem, onLoad: (
 
         const loadModel = async () => {
             try {
-                // BƯỚC 1: Dùng fetch để tải file về dưới dạng Blob
-                // Cách này giúp bypass lỗi 403 do thiếu header hoặc token bị mất
-                const response = await fetch(item.modelUrl!, { mode: 'cors' });
-                if (!response.ok) throw new Error(`Lỗi tải file (${response.status}): ${response.statusText}`);
-                
-                const blob = await response.blob();
-                objectUrlToRevoke = URL.createObjectURL(blob); // Tạo đường dẫn nội bộ an toàn
+                let blob: Blob | null = null;
+                const url = item.modelUrl!;
 
-                // BƯỚC 2: Cấu hình Loader để đọc đường dẫn nội bộ đó
+                // CHIẾN LƯỢC 1: Thử fetch bình thường (Nhanh nhất)
+                try {
+                    console.log("Đang thử tải bằng Fetch...");
+                    const response = await fetch(url, { mode: 'cors' });
+                    if (!response.ok) {
+                         if (response.status === 403) throw new Error("403 Forbidden");
+                         throw new Error(`HTTP Error ${response.status}`);
+                    }
+                    blob = await response.blob();
+                } catch (fetchErr) {
+                    // CHIẾN LƯỢC 2: Nếu lỗi 403 hoặc CORS, dùng Firebase SDK (Chậm hơn xíu nhưng chắc chắn được)
+                    console.warn("Fetch thất bại, chuyển sang Firebase SDK...", fetchErr);
+                    
+                    if (storage && url.includes('firebasestorage')) {
+                        try {
+                            // Tạo reference từ URL đầy đủ
+                            const fileRef = ref(storage, url);
+                            // getBlob dùng giao thức riêng của Firebase, tự động kèm Auth Token chuẩn
+                            blob = await getBlob(fileRef);
+                            console.log("Đã tải thành công bằng Firebase SDK!");
+                        } catch (sdkErr: any) {
+                             console.error("Firebase SDK cũng bó tay:", sdkErr);
+                             throw new Error(`Không thể tải file: ${sdkErr.message}`);
+                        }
+                    } else {
+                        throw fetchErr; // Nếu không phải link firebase thì chịu thua
+                    }
+                }
+
+                if (!blob) throw new Error("File tải về bị rỗng");
+
+                // Tạo URL nội bộ từ Blob đã tải
+                objectUrlToRevoke = URL.createObjectURL(blob);
+
+                // Setup Loader để đọc URL nội bộ này
                 const manager = new THREE.LoadingManager();
-                manager.setURLModifier((url) => {
-                    const filenameRaw = url.replace(/^.*[\\\/]/, '');
+                manager.setURLModifier((u) => {
+                    const filenameRaw = u.replace(/^.*[\\\/]/, '');
                     const filename = decodeURIComponent(filenameRaw);
                     if (item.resources && item.resources[filename]) return item.resources[filename];
-                    return url;
+                    return u;
                 });
 
                 const loader = new GLTFLoader(manager);
-                loader.setCrossOrigin('anonymous'); // Quan trọng cho texture
+                loader.setCrossOrigin('anonymous');
                 
                 const dracoLoader = new DRACOLoader();
                 dracoLoader.setDecoderPath(DRACO_URL);
@@ -130,14 +161,14 @@ const ManualModel = ({ item, onLoad, onError }: { item: DiscoveryItem, onLoad: (
                     undefined,
                     (err) => {
                         if (isMounted) {
-                            console.error("Lỗi GLTFLoader parse:", err);
+                            console.error("Lỗi parse GLB:", err);
                             onError(err);
                         }
                     }
                 );
             } catch (err: any) {
                 if (isMounted) {
-                    console.error("Lỗi Fetch:", err);
+                    console.error("Lỗi tải model nghiêm trọng:", err);
                     onError(err);
                 }
             }
@@ -151,7 +182,7 @@ const ManualModel = ({ item, onLoad, onError }: { item: DiscoveryItem, onLoad: (
         };
     }, [item.modelUrl, item.resources]); 
 
-    // Xử lý Textures (Giữ nguyên logic cũ)
+    // Xử lý Textures (Giữ nguyên)
     useEffect(() => {
         if (!scene || !item.textures) return;
         if (actions) Object.values(actions).forEach((a:any) => a?.reset().fadeIn(0.5).play());
