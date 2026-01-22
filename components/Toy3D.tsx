@@ -1,21 +1,32 @@
-import React, { Component, useRef, useState, useEffect, Suspense, ReactNode } from 'react';
+import React, { Component, useRef, useState, useEffect, Suspense, ReactNode, useImperativeHandle } from 'react';
 import { DiscoveryItem, TextureMaps } from '../types';
 import { Canvas, useThree } from '@react-three/fiber';
 import { useGLTF, OrbitControls, useAnimations, Environment, Center, ContactShadows, Resize } from '@react-three/drei';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader';
+import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter';
 
 interface Toy3DProps {
   item: DiscoveryItem;
   screenshotRef?: React.MutableRefObject<() => string | null>;
+  exportRef?: React.MutableRefObject<() => Promise<Blob | null>>;
 }
 
 const DRACO_URL = 'https://www.gstatic.com/draco/versioned/decoders/1.5.7/';
 
-const ScreenshotHandler = ({ captureRef }: { captureRef?: React.MutableRefObject<() => string | null> }) => {
+// Component xử lý chụp ảnh màn hình và Export GLB
+const SceneHandler = ({ 
+    captureRef, 
+    exportRef 
+}: { 
+    captureRef?: React.MutableRefObject<() => string | null>,
+    exportRef?: React.MutableRefObject<() => Promise<Blob | null>>
+}) => {
     const { gl, scene, camera } = useThree();
+
     useEffect(() => {
+        // 1. Chức năng chụp ảnh thumbnail
         if (captureRef) {
             captureRef.current = () => {
                 try {
@@ -24,7 +35,46 @@ const ScreenshotHandler = ({ captureRef }: { captureRef?: React.MutableRefObject
                 } catch (e) { return null; }
             };
         }
-    }, [captureRef, gl, scene, camera]);
+
+        // 2. Chức năng Export GLB (CỐT LÕI MỚI)
+        if (exportRef) {
+            exportRef.current = async () => {
+                return new Promise((resolve) => {
+                    const exporter = new GLTFExporter();
+                    // Tìm object chính trong scene (bỏ qua ánh sáng, môi trường nếu không cần thiết)
+                    // Hoặc export cả scene
+                    try {
+                        exporter.parse(
+                            scene,
+                            (result) => {
+                                if (result instanceof ArrayBuffer) {
+                                    const blob = new Blob([result], { type: 'model/gltf-binary' });
+                                    resolve(blob);
+                                } else {
+                                    // Trường hợp hiếm hoi trả về JSON nhưng ta ép binary: true
+                                    const blob = new Blob([JSON.stringify(result)], { type: 'application/json' });
+                                    resolve(blob);
+                                }
+                            },
+                            (error) => {
+                                console.error("Lỗi export:", error);
+                                resolve(null);
+                            },
+                            { 
+                                binary: true, // QUAN TRỌNG: Xuất ra .glb (1 file duy nhất)
+                                onlyVisible: true,
+                                maxTextureSize: 2048 // Giới hạn kích thước texture để file không quá nặng
+                            }
+                        );
+                    } catch (e) {
+                        console.error("Critical export error:", e);
+                        resolve(null);
+                    }
+                });
+            };
+        }
+    }, [captureRef, exportRef, gl, scene, camera]);
+
     return null;
 };
 
@@ -44,15 +94,9 @@ const usePatchedResources = (item: DiscoveryItem) => {
             if (!item.modelUrl) return;
 
             // TRƯỜNG HỢP 1: File Cloud (http/https)
-            // Vì file đã được đóng gói (Packed) khi upload, nên chỉ cần dùng trực tiếp.
+            // Đã là file đóng gói sẵn, dùng luôn
             if (!item.modelUrl.startsWith('blob:')) {
-                if (isMounted) {
-                    setState({ 
-                        patchedUrl: item.modelUrl, 
-                        patchedTextures: item.textures || null, 
-                        error: null 
-                    });
-                }
+                if (isMounted) setState({ patchedUrl: item.modelUrl, patchedTextures: item.textures || null, error: null });
                 return;
             }
 
@@ -187,7 +231,7 @@ class ModelErrorBoundary extends Component<ErrorBoundaryProps, { hasError: boole
   render() { return this.state.hasError ? this.props.fallback : this.props.children; }
 }
 
-const Toy3D: React.FC<Toy3DProps> = ({ item, screenshotRef }) => {
+const Toy3D: React.FC<Toy3DProps> = ({ item, screenshotRef, exportRef }) => {
   const { patchedUrl, patchedTextures, error } = usePatchedResources(item);
 
   if (!item.modelUrl) return <div className="flex items-center justify-center w-full h-full text-6xl">{item.icon}</div>;
@@ -217,7 +261,7 @@ const Toy3D: React.FC<Toy3DProps> = ({ item, screenshotRef }) => {
             </div>
         }>
           <Canvas shadows dpr={[1, 1.5]} camera={{ fov: 45, position: [0, 1, 6] }} gl={{ preserveDrawingBuffer: true, antialias: true }}>
-            <ScreenshotHandler captureRef={screenshotRef} />
+            <SceneHandler captureRef={screenshotRef} exportRef={exportRef} />
             <Suspense fallback={null}>
               <Center>
                 <Resize scale={4}>

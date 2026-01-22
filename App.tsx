@@ -36,6 +36,8 @@ export default function App() {
   
   // Ref để gọi chức năng chụp ảnh từ Toy3D
   const screenshotRef = useRef<() => string | null>(() => null);
+  // Ref để gọi chức năng Export GLB từ Toy3D
+  const exportRef = useRef<() => Promise<Blob | null>>(() => Promise.resolve(null));
 
   useEffect(() => {
     const initApp = async () => {
@@ -246,20 +248,44 @@ export default function App() {
     if (!selectedItem || !factData || !selectedItem.modelUrl) return;
     setIsSaving(true);
     
-    // 1. Chụp ảnh màn hình làm thumbnail
+    // 1. Chụp ảnh thumbnail
     let thumbnailData = undefined;
     if (screenshotRef.current) {
         const captured = screenshotRef.current();
-        if (captured) {
-            thumbnailData = captured;
+        if (captured) thumbnailData = captured;
+    }
+
+    // 2. EXPORT GLB TỪ MÀN HÌNH (QUAN TRỌNG)
+    // Thay vì dùng file gốc (có thể bị lỗi ghép nối), ta dùng file xuất trực tiếp từ Scene
+    let glbBlobToUpload: Blob | null = null;
+    
+    // Nếu đang xem file local (blob), ta ưu tiên export từ scene để đóng gói texture/bin
+    if (selectedItem.modelUrl.startsWith('blob:') && exportRef.current) {
+        console.log("Đang đóng gói lại mô hình từ Scene...");
+        try {
+            glbBlobToUpload = await exportRef.current();
+        } catch (e) {
+            console.warn("Lỗi export scene, sẽ dùng file gốc:", e);
         }
     }
 
-    // 2. Cập nhật item với thumbnail mới
+    // Nếu export thất bại, fallback về fetch file gốc (chỉ dùng cho file GLB đơn giản)
+    if (!glbBlobToUpload) {
+         try {
+             const res = await fetch(selectedItem.modelUrl);
+             glbBlobToUpload = await res.blob();
+         } catch(e) {
+             alert("Không thể đọc file mô hình.");
+             setIsSaving(false);
+             return;
+         }
+    }
+
     const itemToSave = { ...selectedItem, thumbnail: thumbnailData };
 
     try {
-      await saveModelToLibrary(itemToSave, factData, itemToSave.modelUrl!, itemToSave.textures, itemToSave.resources);
+      // Truyền blob đã export vào hàm save
+      await saveModelToLibrary(itemToSave, factData, glbBlobToUpload);
       alert("Đã lưu thành công!");
       setIsSaving(false);
     } catch (e) {
@@ -489,7 +515,7 @@ export default function App() {
           <div className="relative w-full h-full overflow-hidden">
             {/* 3D VIEWPORT - Nằm làm nền */}
             <div className="absolute inset-0 z-0 bg-slate-100">
-               <Toy3D item={selectedItem} screenshotRef={screenshotRef} />
+               <Toy3D item={selectedItem} screenshotRef={screenshotRef} exportRef={exportRef} />
             </div>
 
             {/* CONTROL BUTTONS - Luôn nổi phía trên */}

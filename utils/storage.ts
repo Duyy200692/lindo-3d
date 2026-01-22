@@ -6,94 +6,11 @@ import { saveToLocalDB, loadFromLocalDB, deleteFromLocalDB } from './indexedDB';
 
 const COLLECTION_NAME = 'models';
 
-// Helper: Chuyển Blob thành Base64 DataURI
-const blobToDataURI = (blob: Blob): Promise<string> => {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
-    });
-};
-
-// --- LOGIC ĐÓNG GÓI MỚI ---
-// Nhúng tất cả file rời vào trong file GLTF chính
-const packGltfToSingleFile = async (
-    modelBlobUrl: string, 
-    resources: { [key: string]: string } = {}
-): Promise<{ blob: Blob, extension: string }> => {
-    
-    const response = await fetch(modelBlobUrl);
-    const mainBlob = await response.blob();
-    
-    // 1. Kiểm tra nếu là GLB (Binary) -> Đã đóng gói sẵn, không cần làm gì
-    const headerBuffer = await mainBlob.slice(0, 4).arrayBuffer();
-    const headerView = new DataView(headerBuffer);
-    if (headerView.byteLength >= 4 && headerView.getUint32(0, true) === 0x46546C67) {
-        return { blob: mainBlob, extension: 'glb' };
-    }
-
-    // 2. Nếu là GLTF (JSON) -> Tiến hành nhúng resource
-    try {
-        const text = await mainBlob.text();
-        const json = JSON.parse(text);
-        let modified = false;
-
-        // Helper tìm url trong resources map
-        const findResourceUrl = (uri: string) => {
-            const cleanUri = decodeURIComponent(uri).split('/').pop() || '';
-            // Tìm chính xác hoặc tương đối
-            const key = Object.keys(resources).find(k => k === cleanUri || k.endsWith(cleanUri));
-            return key ? resources[key] : null;
-        };
-
-        // Nhúng Buffers (.bin)
-        if (json.buffers) {
-            await Promise.all(json.buffers.map(async (buffer: any) => {
-                if (buffer.uri && !buffer.uri.startsWith('data:')) {
-                    const resUrl = findResourceUrl(buffer.uri);
-                    if (resUrl) {
-                        const resBlob = await (await fetch(resUrl)).blob();
-                        const base64 = await blobToDataURI(resBlob);
-                        buffer.uri = base64; // Thay thế đường dẫn bằng dữ liệu thật
-                        modified = true;
-                    }
-                }
-            }));
-        }
-
-        // Nhúng Images (Textures)
-        if (json.images) {
-            await Promise.all(json.images.map(async (image: any) => {
-                if (image.uri && !image.uri.startsWith('data:')) {
-                    const resUrl = findResourceUrl(image.uri);
-                    if (resUrl) {
-                        const resBlob = await (await fetch(resUrl)).blob();
-                        const base64 = await blobToDataURI(resBlob);
-                        image.uri = base64; // Thay thế đường dẫn bằng dữ liệu thật
-                        modified = true;
-                    }
-                }
-            }));
-        }
-
-        // Tạo blob mới từ JSON đã chỉnh sửa
-        const finalString = JSON.stringify(json);
-        return { 
-            blob: new Blob([finalString], { type: 'application/json' }), 
-            extension: 'gltf' 
-        };
-
-    } catch (e) {
-        console.warn("Không thể đóng gói GLTF, sẽ upload file gốc:", e);
-        return { blob: mainBlob, extension: 'gltf' };
-    }
-};
-
 const uploadFile = async (path: string, blob: Blob): Promise<string> => {
     if (!storage) throw new Error("Storage chưa sẵn sàng.");
     const storageRef = ref(storage, path);
-    const metadata = { contentType: blob.type, cacheControl: 'public,max-age=31536000' };
+    // Lưu ý: Luôn gán type là model/gltf-binary cho chuẩn
+    const metadata = { contentType: 'model/gltf-binary', cacheControl: 'public,max-age=31536000' };
     await uploadBytes(storageRef, blob, metadata);
     return await getDownloadURL(storageRef);
 };
@@ -101,13 +18,15 @@ const uploadFile = async (path: string, blob: Blob): Promise<string> => {
 export const saveModelToLibrary = async (
   item: DiscoveryItem, 
   factData: FunFactData,
-  modelBlobUrl: string,
-  textureMaps?: TextureMaps,
+  modelBlob: Blob, // Đây giờ là Blob của file .glb hoàn chỉnh
+  textureMaps?: TextureMaps, // Giữ lại để tham khảo, nhưng modelBlob đã chứa texture rồi
   resources?: { [key: string]: string }
 ): Promise<void> => {
   
+  // 1. Tạo blob URL tạm để lưu local
+  const tempUrl = URL.createObjectURL(modelBlob);
   try {
-      await saveToLocalDB(item, factData, modelBlobUrl, resources);
+      await saveToLocalDB(item, factData, tempUrl, {});
   } catch (localError) { console.warn("Lỗi lưu offline:", localError); }
 
   if (!db || !storage) {
@@ -119,32 +38,10 @@ export const saveModelToLibrary = async (
     const uniqueId = item.id.startsWith('temp-') ? `item-${Date.now()}` : item.id; 
     const folderPath = `models/${uniqueId}`;
 
-    // --- BƯỚC QUAN TRỌNG: ĐÓNG GÓI ---
-    console.log("Đang đóng gói mô hình...");
-    const { blob: packedBlob, extension } = await packGltfToSingleFile(modelBlobUrl, resources);
-    
-    // Upload file duy nhất (đã chứa tất cả mọi thứ)
-    // Đặt tên file cố định là 'packed_model' để dễ quản lý
-    const cloudFileName = `packed_model.${extension}`;
-    const modelDownloadUrl = await uploadFile(`${folderPath}/${cloudFileName}`, packedBlob);
-
-    // Xử lý Custom Textures (Da, Normal Map...) - Những cái này ko nằm trong GLTF nên vẫn upload rời
-    const textureUrls: TextureMaps = {};
-    if (textureMaps) {
-        const texturePromises = Object.entries(textureMaps).map(async ([key, url]) => {
-            if (url && url.startsWith('blob:')) {
-                try {
-                    const tRes = await fetch(url);
-                    const tBlob = await tRes.blob();
-                    const ext = tBlob.type.includes('jpeg') ? 'jpg' : 'png';
-                    const tUrl = await uploadFile(`${folderPath}/textures/${key}.${ext}`, tBlob);
-                    // @ts-ignore
-                    textureUrls[key] = tUrl;
-                } catch (e) { console.warn(`Bỏ qua texture lỗi: ${key}`); }
-            }
-        });
-        await Promise.all(texturePromises);
-    }
+    console.log("Đang upload mô hình...");
+    // Upload file GLB duy nhất
+    const cloudFileName = `model.glb`;
+    const modelDownloadUrl = await uploadFile(`${folderPath}/${cloudFileName}`, modelBlob);
 
     // --- LƯU DATABASE ---
     await addDoc(collection(db, COLLECTION_NAME), {
@@ -152,9 +49,9 @@ export const saveModelToLibrary = async (
       icon: item.icon,
       thumbnail: item.thumbnail || null,
       modelUrl: modelDownloadUrl,
-      // QUAN TRỌNG: Resources set rỗng vì tất cả đã nằm trong file modelUrl rồi
+      // Resources và Textures giờ trống vì tất cả đã nằm trong file GLB
       resources: {}, 
-      textures: textureUrls,
+      textures: {},
       textureFlipY: item.textureFlipY || false,
       color: item.color,
       modelType: item.modelType,
