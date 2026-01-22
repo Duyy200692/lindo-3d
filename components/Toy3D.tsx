@@ -168,7 +168,7 @@ const Model = ({ url, textures, textureFlipY = false }: { url: string, textures?
      // Config loader thủ công nếu cần
      const dracoLoader = new DRACOLoader();
      dracoLoader.setDecoderPath(DRACO_URL);
-     (loader as GLTFLoader).setDRACOLoader(dracoLoader);
+     (loader as unknown as GLTFLoader).setDRACOLoader(dracoLoader);
   });
 
   const { actions } = useAnimations(animations, group);

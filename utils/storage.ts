@@ -6,17 +6,34 @@ import { saveToLocalDB, loadFromLocalDB, deleteFromLocalDB } from './indexedDB';
 
 const COLLECTION_NAME = 'models';
 
+// Hàm làm sạch tên file: "Mô Hình T-Rex.gltf" -> "mo_hinh_t_rex.gltf"
+const sanitizeFilename = (filename: string): string => {
+  const extension = filename.split('.').pop() || '';
+  const nameWithoutExt = filename.substring(0, filename.lastIndexOf('.'));
+  
+  // 1. Chuyển tiếng Việt có dấu thành không dấu
+  let cleanName = nameWithoutExt.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  // 2. Chuyển thành chữ thường
+  cleanName = cleanName.toLowerCase();
+  // 3. Thay khoảng trắng và ký tự lạ bằng dấu gạch dưới
+  cleanName = cleanName.replace(/[^a-z0-9]/g, '_');
+  // 4. Xóa gạch dưới dư thừa (___ -> _)
+  cleanName = cleanName.replace(/_+/g, '_');
+  // 5. Cắt ngắn nếu quá dài (tối đa 30 ký tự)
+  if (cleanName.length > 30) cleanName = cleanName.substring(0, 30);
+
+  return `${cleanName}.${extension}`;
+};
+
 // Hàm phụ để tải file lên Storage với cơ chế retry đơn giản
 const uploadFile = async (path: string, blob: Blob): Promise<string> => {
     if (!storage) throw new Error("Storage chưa sẵn sàng.");
     
-    // Thêm timestamp vào tên file để tránh cache
     const storageRef = ref(storage, path);
     
-    // Metadata giúp xử lý CORS tốt hơn trên một số trình duyệt
     const metadata = {
         contentType: blob.type,
-        cacheControl: 'public,max-age=3600'
+        cacheControl: 'public,max-age=31536000' // Cache 1 năm vì file này không thay đổi
     };
 
     await uploadBytes(storageRef, blob, metadata);
@@ -52,28 +69,48 @@ export const saveModelToLibrary = async (
 
     // --- UPLOAD MÔ HÌNH CHÍNH ---
     let mainFileName = 'scene.glb'; 
+    let originalMainName = 'scene.glb';
+
     if (resources && modelBlobUrl) {
         // Tìm tên file gốc nếu có
         const foundName = Object.keys(resources).find(key => resources[key] === modelBlobUrl);
-        if (foundName) mainFileName = foundName;
+        if (foundName) {
+            originalMainName = foundName;
+            mainFileName = sanitizeFilename(foundName); // Làm sạch tên file
+        }
     }
 
     const modelRes = await fetch(modelBlobUrl);
     const modelBlob = await modelRes.blob();
+    // Lưu với tên sạch
     const modelDownloadUrl = await uploadFile(`${folderPath}/${mainFileName}`, modelBlob);
 
     // --- UPLOAD RESOURCES (BIN, TEXTURES RỜI) ---
+    // QUAN TRỌNG: Key của resourceUrls phải giữ là tên GỐC (originalMainName) 
+    // để file GLTF có thể tìm thấy nó. Nhưng file trên Cloud thì dùng tên SẠCH.
     const resourceUrls: { [key: string]: string } = {};
+    
     if (resources) {
-      const resourcePromises = Object.entries(resources).map(async ([filename, url]) => {
-        if (url && url.startsWith('blob:') && filename !== mainFileName) {
+      const resourcePromises = Object.entries(resources).map(async ([originalFilename, url]) => {
+        // Bỏ qua file chính vì đã upload ở trên, nhưng cần map lại URL nếu nó trùng
+        if (originalFilename === originalMainName) {
+             resourceUrls[originalFilename] = modelDownloadUrl;
+             return;
+        }
+
+        if (url && url.startsWith('blob:')) {
            try {
              const resRes = await fetch(url);
              const resBlob = await resRes.blob();
-             const resUrl = await uploadFile(`${folderPath}/resources/${filename}`, resBlob);
-             resourceUrls[filename] = resUrl;
+             
+             // Làm sạch tên file trước khi upload lên Storage
+             const cleanName = sanitizeFilename(originalFilename);
+             const resUrl = await uploadFile(`${folderPath}/resources/${cleanName}`, resBlob);
+             
+             // Lưu vào map: Tên Gốc -> URL Mới (đã sạch)
+             resourceUrls[originalFilename] = resUrl;
            } catch (e) {
-             console.warn(`Bỏ qua resource lỗi: ${filename}`, e);
+             console.warn(`Bỏ qua resource lỗi: ${originalFilename}`, e);
            }
         }
       });
@@ -88,8 +125,8 @@ export const saveModelToLibrary = async (
                 try {
                     const tRes = await fetch(url);
                     const tBlob = await tRes.blob();
-                    // Xác định đuôi file (thường là png hoặc jpg)
                     const ext = tBlob.type.includes('jpeg') ? 'jpg' : 'png';
+                    // Texture mapping dùng key cố định (map, normalMap...) nên tên file đơn giản
                     const tUrl = await uploadFile(`${folderPath}/textures/${key}.${ext}`, tBlob);
                     // @ts-ignore
                     textureUrls[key] = tUrl;
@@ -103,9 +140,9 @@ export const saveModelToLibrary = async (
     await addDoc(collection(db, COLLECTION_NAME), {
       name: factData.name,
       icon: item.icon,
-      thumbnail: item.thumbnail || null, // Lưu ảnh thumbnail base64 (chụp màn hình)
+      thumbnail: item.thumbnail || null,
       modelUrl: modelDownloadUrl,
-      resources: resourceUrls,
+      resources: resourceUrls, // Map này giúp GLTF tìm đúng file dù tên trên cloud đã đổi
       textures: textureUrls,
       textureFlipY: item.textureFlipY || false,
       color: item.color,
@@ -130,16 +167,15 @@ export const loadLibrary = async (): Promise<{ item: DiscoveryItem, factData: Fu
   // 1. Load Local
   try {
       const local = await loadFromLocalDB();
-      // Đánh dấu items local và thêm timestamp giả định nếu thiếu
       const localFormatted = local.map(l => ({
           ...l,
-          createdAtTime: Date.now(), // Local coi như mới nhất tạm thời nếu không có time
+          createdAtTime: Date.now(), 
           isLocal: true
       }));
       allItemsRaw = [...allItemsRaw, ...localFormatted];
   } catch (e) { console.error("Lỗi load local:", e); }
 
-  // 2. Load Cloud (QUAN TRỌNG: Không dùng orderBy để tránh lỗi Index)
+  // 2. Load Cloud
   if (db) {
     try {
         const q = query(collection(db, COLLECTION_NAME));
@@ -147,8 +183,6 @@ export const loadLibrary = async (): Promise<{ item: DiscoveryItem, factData: Fu
         
         const cloudItems = querySnapshot.docs.map((docSnap: any) => {
             const data = docSnap.data();
-            
-            // Xử lý an toàn cho createdAt (có thể là Timestamp object hoặc null)
             let timeVal = 0;
             if (data.createdAt && data.createdAt.seconds) {
                 timeVal = data.createdAt.seconds * 1000;
@@ -169,17 +203,13 @@ export const loadLibrary = async (): Promise<{ item: DiscoveryItem, factData: Fu
         });
         
         allItemsRaw = [...allItemsRaw, ...cloudItems];
-        console.log(`Đã tải ${cloudItems.length} mô hình từ Cloud`);
     } catch (e) {
         console.error("Không tải được dữ liệu Cloud:", e);
     }
   }
 
-  // 3. Lọc trùng và Sắp xếp Client-side (Mới nhất lên đầu)
-  // Ưu tiên Cloud item nếu trùng ID (trừ temp-id)
   const uniqueMap = new Map();
   allItemsRaw.forEach(entry => {
-      // Nếu đã có item này rồi, và item hiện tại là Cloud thì ghi đè (ưu tiên Cloud)
       if (uniqueMap.has(entry.item.id)) {
           if (!entry.isLocal) {
               uniqueMap.set(entry.item.id, entry);
@@ -190,8 +220,6 @@ export const loadLibrary = async (): Promise<{ item: DiscoveryItem, factData: Fu
   });
 
   const finalItems = Array.from(uniqueMap.values());
-  
-  // Sắp xếp giảm dần theo thời gian
   finalItems.sort((a: any, b: any) => b.createdAtTime - a.createdAtTime);
 
   return finalItems.map(entry => ({ item: entry.item, factData: entry.factData }));
