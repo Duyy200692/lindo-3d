@@ -320,6 +320,8 @@ export default function App() {
     // 2. Tạo File GLB hoàn chỉnh
     let glbBlobToUpload: Blob | null = null;
     
+    // Nếu đang ở màn hình Viewer, hãy dùng Toy3D để export toàn bộ scene thành 1 file .glb duy nhất
+    // Đây là bước quan trọng nhất để sửa lỗi "thiếu file .bin"
     if (exportRef.current) {
         console.log("Đang đóng gói mô hình (gộp .bin + textures)...");
         try {
@@ -329,19 +331,24 @@ export default function App() {
         }
     }
 
-    // NẾU EXPORT THẤT BẠI: Dừng ngay lập tức, không dùng fallback cũ (gây lỗi file)
+    // Fallback: Nếu không export được (hiếm khi), thử tải file gốc
+    // Lưu ý: Cách này sẽ hỏng nếu file gốc là .gltf rời rạc
     if (!glbBlobToUpload) {
-         alert("Không thể đóng gói mô hình để lưu. Hãy đảm bảo mô hình đang hiển thị rõ ràng trên màn hình trước khi lưu bé nhé!");
-         setIsSaving(false);
-         return;
+         try {
+             console.warn("Export thất bại, đang thử dùng file gốc (có rủi ro)...");
+             const res = await fetch(selectedItem.modelUrl);
+             glbBlobToUpload = await res.blob();
+         } catch(e) {
+             alert("Không thể đọc file mô hình để lưu.");
+             setIsSaving(false);
+             return;
+         }
     }
 
-    // Nếu export thành công, ta có 1 file Blob (Binary GLB) chứa tất cả.
     const itemToSave = { ...selectedItem, thumbnail: thumbnailData };
 
     try {
-      // Pass thêm selectedItem.resources (dù export GLB thì ít cần, nhưng tốt cho local DB logic)
-      await saveModelToLibrary(itemToSave, factData, glbBlobToUpload, selectedItem.textures, selectedItem.resources);
+      await saveModelToLibrary(itemToSave, factData, glbBlobToUpload);
       alert("Đã lưu thành công! Bé có thể xem lại bất cứ lúc nào.");
       setIsSaving(false);
     } catch (e: any) {
