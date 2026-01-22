@@ -1,6 +1,7 @@
 import { initializeApp, getApp, getApps, FirebaseApp } from "firebase/app";
 import { getFirestore, Firestore } from "firebase/firestore";
 import { getStorage, FirebaseStorage } from "firebase/storage";
+import { getAuth, Auth } from "firebase/auth";
 
 const firebaseConfig = {
   apiKey: "AIzaSyDwqbnonJu8DA7BxRnw57klhBM7iaGPdT0",
@@ -14,6 +15,7 @@ const firebaseConfig = {
 let app: FirebaseApp;
 let db: Firestore | null = null;
 let storage: FirebaseStorage | null = null;
+let auth: Auth | null = null;
 
 try {
     if (!getApps().length) {
@@ -24,10 +26,11 @@ try {
 
     db = getFirestore(app);
     storage = getStorage(app);
+    auth = getAuth(app);
     
     console.log("Firebase đã kết nối!");
 } catch (error) {
     console.error("Lỗi cấu hình Firebase:", error);
 }
 
-export { db, storage, app };
+export { db, storage, auth, app };

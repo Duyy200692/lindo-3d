@@ -3,8 +3,9 @@ import { DiscoveryItem, AppMode, FunFactData, TextureMaps } from './types';
 import Toy3D from './components/Toy3D';
 import { fetchFunFact } from './services/geminiService';
 import { saveModelToLibrary, loadLibrary, deleteFromLibrary } from './utils/storage';
-import { db } from './firebaseConfig';
-import { Sparkles, ArrowLeft, Volume2, Rotate3d, Info, Upload, ArrowRight, Wand2, Save, Library, Trash2, Image as ImageIcon, Layers, Check, Zap, RefreshCw, Lightbulb, Wifi, WifiOff, Loader2, Eye, EyeOff, HardDrive } from 'lucide-react';
+import { db, auth } from './firebaseConfig';
+import { signInAnonymously, signInWithEmailAndPassword, signOut, onAuthStateChanged, User } from 'firebase/auth';
+import { Sparkles, ArrowLeft, Volume2, Rotate3d, Info, Upload, ArrowRight, Wand2, Save, Library, Trash2, Image as ImageIcon, Layers, Check, Zap, RefreshCw, Lightbulb, Wifi, WifiOff, Loader2, Eye, EyeOff, HardDrive, ShieldCheck, Lock, LogOut, X } from 'lucide-react';
 
 export default function App() {
   const [mode, setMode] = useState<AppMode>(AppMode.GALLERY);
@@ -16,6 +17,16 @@ export default function App() {
   const [isOnline, setIsOnline] = useState(true);
   const [isAppReady, setIsAppReady] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  
+  // Auth & Admin State
+  const [user, setUser] = useState<User | null>(null);
+  const [showLoginModal, setShowLoginModal] = useState(false);
+  const [adminEmail, setAdminEmail] = useState("");
+  const [adminPassword, setAdminPassword] = useState("");
+  const [authError, setAuthError] = useState("");
+
+  // Kiểm tra xem user hiện tại có phải là Admin thật (đã đăng nhập email) hay không
+  const isAdmin = user && !user.isAnonymous;
   
   // State for visibility toggle
   const [showInfo, setShowInfo] = useState(true);
@@ -34,9 +45,7 @@ export default function App() {
   const textureInputRef = useRef<HTMLInputElement>(null);
   const multiTextureInputRef = useRef<HTMLInputElement>(null);
   
-  // Ref để gọi chức năng chụp ảnh từ Toy3D
   const screenshotRef = useRef<() => string | null>(() => null);
-  // Ref để gọi chức năng Export GLB từ Toy3D
   const exportRef = useRef<() => Promise<Blob | null>>(() => Promise.resolve(null));
 
   useEffect(() => {
@@ -45,8 +54,24 @@ export default function App() {
       window.addEventListener('online', () => setIsOnline(true));
       window.addEventListener('offline', () => setIsOnline(false));
 
-      await loadSavedLibrary();
-      setIsAppReady(true);
+      if (auth) {
+          const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+              if (currentUser) {
+                  console.log("User state:", currentUser.isAnonymous ? "Guest" : "Admin", currentUser.uid);
+                  setUser(currentUser);
+                  await loadSavedLibrary();
+                  setIsAppReady(true);
+              } else {
+                  // Nếu chưa đăng nhập gì cả, tự động đăng nhập Khách (Anonymous)
+                  console.log("Tự động đăng nhập Guest...");
+                  await signInAnonymously(auth);
+              }
+          });
+          return () => unsubscribe();
+      } else {
+          await loadSavedLibrary();
+          setIsAppReady(true);
+      }
     };
     
     initApp();
@@ -70,6 +95,28 @@ export default function App() {
     }
   };
 
+  const handleAdminLogin = async (e: React.FormEvent) => {
+      e.preventDefault();
+      setAuthError("");
+      if (!auth) return;
+      try {
+          await signInWithEmailAndPassword(auth, adminEmail, adminPassword);
+          setShowLoginModal(false);
+          setAdminEmail("");
+          setAdminPassword("");
+          alert("Xin chào Admin! Bạn đã có toàn quyền kiểm soát.");
+      } catch (err: any) {
+          console.error(err);
+          setAuthError("Email hoặc mật khẩu không đúng.");
+      }
+  };
+
+  const handleLogout = async () => {
+      if (!auth) return;
+      await signOut(auth); // Khi signout, onAuthStateChanged sẽ tự chạy lại signInAnonymously
+      alert("Đã đăng xuất Admin. Trở về chế độ Trẻ em.");
+  };
+
   const handleBack = () => {
     setMode(AppMode.GALLERY);
     setSelectedItem(null);
@@ -83,7 +130,7 @@ export default function App() {
     window.speechSynthesis.cancel();
     setSpeaking(false);
     setIsSaving(false);
-    setShowInfo(true); // Reset to show info when going back
+    setShowInfo(true); 
     loadSavedLibrary(); 
   };
 
@@ -248,18 +295,14 @@ export default function App() {
     if (!selectedItem || !factData || !selectedItem.modelUrl) return;
     setIsSaving(true);
     
-    // 1. Chụp ảnh thumbnail
     let thumbnailData = undefined;
     if (screenshotRef.current) {
         const captured = screenshotRef.current();
         if (captured) thumbnailData = captured;
     }
 
-    // 2. EXPORT GLB TỪ MÀN HÌNH (QUAN TRỌNG)
-    // Thay vì dùng file gốc (có thể bị lỗi ghép nối), ta dùng file xuất trực tiếp từ Scene
     let glbBlobToUpload: Blob | null = null;
     
-    // Nếu đang xem file local (blob), ta ưu tiên export từ scene để đóng gói texture/bin
     if (selectedItem.modelUrl.startsWith('blob:') && exportRef.current) {
         console.log("Đang đóng gói lại mô hình từ Scene...");
         try {
@@ -269,7 +312,6 @@ export default function App() {
         }
     }
 
-    // Nếu export thất bại, fallback về fetch file gốc (chỉ dùng cho file GLB đơn giản)
     if (!glbBlobToUpload) {
          try {
              const res = await fetch(selectedItem.modelUrl);
@@ -284,12 +326,11 @@ export default function App() {
     const itemToSave = { ...selectedItem, thumbnail: thumbnailData };
 
     try {
-      // Truyền blob đã export vào hàm save
       await saveModelToLibrary(itemToSave, factData, glbBlobToUpload);
       alert("Đã lưu thành công!");
       setIsSaving(false);
     } catch (e) {
-      alert("Có lỗi khi lưu, nhưng đừng lo, bé thử lại sau nhé!");
+      alert("Có lỗi khi lưu. Kiểm tra kết nối mạng nhé!");
       setIsSaving(false);
     }
   };
@@ -302,9 +343,14 @@ export default function App() {
 
   const handleDeleteItem = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
-    if(confirm("Bé có chắc muốn xóa không?")) {
-        await deleteFromLibrary(id);
-        loadSavedLibrary();
+    if(confirm("Admin: Bạn chắc chắn muốn xóa mô hình này khỏi Cloud?")) {
+        try {
+            await deleteFromLibrary(id);
+            alert("Đã xóa thành công!");
+            loadSavedLibrary();
+        } catch(err) {
+            alert("Lỗi xóa: " + err);
+        }
     }
   }
 
@@ -348,8 +394,8 @@ export default function App() {
       <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 text-center">
         <div className="bg-white p-10 rounded-[40px] shadow-xl border border-slate-100 animate-float">
           <Rotate3d className="w-16 h-16 text-indigo-500 mx-auto mb-4 animate-spin-fast" />
-          <h2 className="text-2xl font-black text-slate-800 mb-2">Đang kết nối thư viện...</h2>
-          <p className="text-slate-500">Chờ một xíu để Kiddo chuẩn bị dữ liệu nhé!</p>
+          <h2 className="text-2xl font-black text-slate-800 mb-2">Đang khởi động...</h2>
+          <p className="text-slate-500">Kiddo đang kết nối với vệ tinh...</p>
           <div className="mt-8 flex justify-center gap-1">
              <div className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" style={{animationDelay: '0s'}}></div>
              <div className="w-2 h-2 bg-indigo-400 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></div>
@@ -373,12 +419,31 @@ export default function App() {
       {mode === AppMode.GALLERY && (
          <header className="relative z-20 px-6 py-4 flex items-center justify-between shrink-0">
             <div className="flex items-center gap-2">
-            <div className="p-2 bg-white rounded-xl shadow-sm">
-                <Rotate3d className="w-8 h-8 text-indigo-500" />
+            <div className={`p-2 bg-white rounded-xl shadow-sm ${isAdmin ? 'ring-2 ring-red-400' : ''}`}>
+                <Rotate3d className={`w-8 h-8 ${isAdmin ? 'text-red-500' : 'text-indigo-500'}`} />
             </div>
-            <h1 className="text-2xl font-bold text-slate-700 tracking-tight">Kiddo<span className="text-indigo-500">Builder</span></h1>
+            <h1 className="text-2xl font-bold text-slate-700 tracking-tight">Kiddo<span className={isAdmin ? "text-red-500" : "text-indigo-500"}>{isAdmin ? "Admin" : "Builder"}</span></h1>
             </div>
             <div className="flex items-center gap-2">
+                {/* NÚT LOGIN ADMIN */}
+                {isAdmin ? (
+                    <button 
+                        onClick={handleLogout}
+                        className="p-2 rounded-full border border-red-200 bg-red-50 text-red-500 hover:bg-red-100 active:scale-95 transition-all"
+                        title="Đăng xuất Admin"
+                    >
+                        <LogOut className="w-4 h-4" />
+                    </button>
+                ) : (
+                    <button 
+                        onClick={() => setShowLoginModal(true)}
+                        className="p-2 rounded-full border border-slate-100 bg-white/60 text-slate-400 hover:text-indigo-500 hover:bg-white active:scale-95 transition-all"
+                        title="Đăng nhập Admin"
+                    >
+                        <Lock className="w-4 h-4" />
+                    </button>
+                )}
+
                 <button 
                   onClick={() => loadSavedLibrary()} 
                   className={`p-2 rounded-full border border-slate-100 bg-white/60 text-slate-500 hover:text-indigo-500 hover:bg-white active:scale-95 transition-all ${isRefreshing ? 'animate-spin' : ''}`}
@@ -389,9 +454,13 @@ export default function App() {
                 <div className="flex items-center gap-2 bg-white/60 px-3 py-1.5 rounded-full backdrop-blur-sm border border-slate-100 shadow-sm">
                 {isOnline ? (
                     db ? (
-                        <><Wifi className="w-4 h-4 text-green-500" /><span className="text-xs font-bold text-green-600">Cloud Sync</span></>
+                        isAdmin ? (
+                            <><ShieldCheck className="w-4 h-4 text-red-500" /><span className="text-xs font-bold text-red-600">Admin</span></>
+                        ) : (
+                            <><Wifi className="w-4 h-4 text-green-500" /><span className="text-xs font-bold text-green-600">Khách</span></>
+                        )
                     ) : (
-                        <><HardDrive className="w-4 h-4 text-orange-500" /><span className="text-xs font-bold text-orange-600">Thiết bị</span></>
+                        <><HardDrive className="w-4 h-4 text-orange-500" /><span className="text-xs font-bold text-orange-600">Local</span></>
                     )
                 ) : (
                     <><WifiOff className="w-4 h-4 text-slate-400" /><span className="text-xs font-bold text-slate-500">Offline</span></>
@@ -437,10 +506,15 @@ export default function App() {
                   </div>
                 ) : (
                   savedItems.map((record) => (
-                    <div key={record.item.id} onClick={() => handleOpenLibraryItem(record)} className="bg-white p-3 rounded-2xl shadow-sm border border-slate-100 flex items-center gap-3 hover:bg-slate-50 active:scale-[0.98] transition-all relative group h-20">
+                    <div key={record.item.id} onClick={() => handleOpenLibraryItem(record)} className="bg-white p-3 rounded-2xl shadow-sm border border-slate-100 flex items-center gap-3 hover:bg-slate-50 active:scale-[0.98] transition-all relative group h-20 cursor-pointer">
                       <div className="w-14 h-14 bg-indigo-50 rounded-xl flex items-center justify-center overflow-hidden shrink-0 border border-slate-100">
                         {record.item.thumbnail ? (
-                            <img src={record.item.thumbnail} alt={record.item.name} className="w-full h-full object-cover" />
+                            <img 
+                                src={record.item.thumbnail} 
+                                alt={record.item.name} 
+                                className="w-full h-full object-cover" 
+                                crossOrigin="anonymous" // QUAN TRỌNG: Giúp load ảnh từ Cloud
+                            />
                         ) : (
                             <span className="text-2xl">{record.item.icon}</span>
                         )}
@@ -455,9 +529,12 @@ export default function App() {
                             )}
                          </p>
                       </div>
-                      <button onClick={(e) => handleDeleteItem(e, record.item.id)} className="p-2 bg-red-50 text-red-400 rounded-full opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-100 hover:text-red-500">
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      {/* CHỈ ADMIN HOẶC FILE LOCAL MỚI ĐƯỢC XÓA */}
+                      {(isAdmin || record.item.id.startsWith('temp')) && (
+                          <button onClick={(e) => handleDeleteItem(e, record.item.id)} className="p-2 bg-red-50 text-red-500 rounded-full hover:bg-red-100 transition-colors z-10">
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                      )}
                     </div>
                   ))
                 )}
@@ -466,6 +543,37 @@ export default function App() {
           </div>
         )}
 
+        {/* LOGIN MODAL */}
+        {showLoginModal && (
+            <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fadeIn">
+                <div className="bg-white rounded-3xl shadow-2xl p-6 w-full max-w-sm relative">
+                    <button onClick={() => setShowLoginModal(false)} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600">
+                        <X className="w-6 h-6" />
+                    </button>
+                    <div className="text-center mb-6">
+                        <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-2 text-red-500">
+                            <ShieldCheck className="w-6 h-6" />
+                        </div>
+                        <h3 className="text-xl font-bold text-slate-800">Đăng Nhập Admin</h3>
+                        <p className="text-xs text-slate-500">Khu vực dành cho người quản lý</p>
+                    </div>
+                    <form onSubmit={handleAdminLogin} className="space-y-4">
+                        <div>
+                            <label className="block text-xs font-bold text-slate-500 mb-1 ml-1">Email</label>
+                            <input type="email" value={adminEmail} onChange={(e) => setAdminEmail(e.target.value)} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:border-red-500 focus:ring-2 focus:ring-red-100 outline-none" required />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-bold text-slate-500 mb-1 ml-1">Mật khẩu</label>
+                            <input type="password" value={adminPassword} onChange={(e) => setAdminPassword(e.target.value)} className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:border-red-500 focus:ring-2 focus:ring-red-100 outline-none" required />
+                        </div>
+                        {authError && <p className="text-red-500 text-xs font-bold text-center">{authError}</p>}
+                        <button type="submit" className="w-full py-3 bg-red-500 text-white rounded-xl font-bold shadow-lg shadow-red-200 hover:bg-red-600 active:scale-95 transition-all">Đăng nhập</button>
+                    </form>
+                </div>
+            </div>
+        )}
+
+        {/* ... (Các phần UI khác giữ nguyên) ... */}
         {showNameInput && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fadeIn">
             <div className="bg-white rounded-3xl shadow-2xl p-6 w-full max-w-md relative overflow-hidden flex flex-col max-h-[90vh]">
@@ -532,6 +640,7 @@ export default function App() {
                    {showInfo ? <EyeOff className="w-6 h-6" /> : <Eye className="w-6 h-6" />}
                  </button>
 
+                 {/* Chỉ cho phép lưu nếu không phải file cloud hoặc muốn lưu lại bản khác */}
                  <button onClick={handleSaveToLibrary} disabled={isSaving} className="px-4 py-2 bg-white/80 backdrop-blur-md rounded-2xl shadow-lg border border-white/50 text-indigo-600 font-bold flex items-center gap-2 active:scale-95 transition-all">
                     {isSaving ? <Loader2 className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />}
                     <span className="hidden sm:inline">{isSaving ? "Đang lưu..." : "Lưu lại"}</span>
