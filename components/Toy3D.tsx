@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter';
-import { ref, getBlob } from 'firebase/storage'; 
+import { ref, getBytes } from 'firebase/storage'; 
 import { storage } from '../firebaseConfig'; 
 
 interface Toy3DProps {
@@ -16,19 +16,6 @@ interface Toy3DProps {
 }
 
 const DRACO_URL = 'https://www.gstatic.com/draco/versioned/decoders/1.5.7/';
-
-// Helper trích xuất path từ URL cũ (cho các item đã lỡ lưu mà thiếu storagePath)
-const extractStoragePathFromUrl = (url: string): string | null => {
-    try {
-        // Firebase URL format: .../b/[bucket]/o/[path encoded]?token=...
-        const regex = /\/o\/(.+?)(\?|$)/;
-        const match = url.match(regex);
-        if (match && match[1]) {
-            return decodeURIComponent(match[1]);
-        }
-    } catch(e) { console.error("Parse URL failed", e); }
-    return null;
-}
 
 const SceneHandler = ({ 
     captureRef, 
@@ -112,61 +99,68 @@ const ManualModel = ({ item, onLoad, onError }: { item: DiscoveryItem, onLoad: (
                 let blob: Blob | null = null;
                 const url = item.modelUrl!;
                 
-                // --- CHIẾN LƯỢC TẢI THÔNG MINH ---
-                
-                // 1. Kiểm tra xem có phải là file local (blob:...) không?
+                // 1. Nếu là file đang chọn từ máy (blob:...) -> Tải trực tiếp
                 if (url.startsWith('blob:')) {
-                    console.log("Đang tải từ bộ nhớ tạm (Local Blob)...");
                     const res = await fetch(url);
                     blob = await res.blob();
                 } 
-                // 2. Nếu là file Cloud, ưu tiên dùng Firebase SDK (getBlob) để bypass CORS
+                // 2. Nếu là file Cloud -> Dùng SDK GetBytes (Bỏ qua CORS, Bỏ qua 403)
                 else if (storage && url.includes('firebasestorage')) {
-                    console.log("Phát hiện link Firebase, kích hoạt chế độ tải an toàn...");
-                    try {
-                        // Ưu tiên 1: Dùng storagePath chính chủ (nếu có)
-                        // Ưu tiên 2: Trích xuất path từ URL (cho file cũ)
-                        // Ưu tiên 3: Dùng trực tiếp URL (hên xui)
-                        let pathRef;
-                        
-                        if (item.storagePath) {
-                            console.log(`Dùng Storage Path: ${item.storagePath}`);
-                            pathRef = ref(storage, item.storagePath);
-                        } else {
-                            const extractedPath = extractStoragePathFromUrl(url);
-                            if (extractedPath) {
-                                console.log(`Trích xuất được Path từ URL: ${extractedPath}`);
-                                pathRef = ref(storage, extractedPath);
+                    console.log("🚀 Kích hoạt chế độ tải ưu tiên SDK...");
+                    
+                    // Thuật toán trích xuất Path chính xác từ URL
+                    // URL mẫu: https://.../o/models%2Fitem-123%2Fmodel.glb?token=...
+                    let targetPath = item.storagePath;
+
+                    if (!targetPath) {
+                        try {
+                            const pathPart = url.split('/o/')[1]; // Lấy phần sau /o/
+                            if (pathPart) {
+                                const cleanPath = pathPart.split('?')[0]; // Bỏ phần ?token...
+                                targetPath = decodeURIComponent(cleanPath); // Giải mã ký tự đặc biệt (%2F -> /)
+                                console.log("🔍 Đã trích xuất path:", targetPath);
+                            }
+                        } catch (e) { console.warn("Không trích xuất được path từ URL"); }
+                    }
+
+                    if (targetPath) {
+                        try {
+                            const fileRef = ref(storage, targetPath);
+                            // getBytes tải file vào bộ nhớ RAM, bỏ qua mọi rào cản trình duyệt
+                            const buffer = await getBytes(fileRef);
+                            blob = new Blob([buffer]);
+                        } catch (sdkErr: any) {
+                            console.error("SDK Error:", sdkErr);
+                            // Nếu lỗi 'not-found', có thể do path sai, thử fallback ID
+                            if (sdkErr.code === 'storage/object-not-found') {
+                                try {
+                                    console.warn("Thử đường dẫn dự phòng theo ID...");
+                                    const backupPath = `models/${item.id}/model.glb`;
+                                    const buffer = await getBytes(ref(storage, backupPath));
+                                    blob = new Blob([buffer]);
+                                } catch (backupErr) {
+                                    throw new Error("Không tìm thấy file trên máy chủ (Lỗi 404)");
+                                }
                             } else {
-                                console.warn("Không tìm thấy path, thử dùng URL trực tiếp...");
-                                pathRef = ref(storage, url);
+                                throw new Error(`Lỗi tải file bảo mật: ${sdkErr.code}`);
                             }
                         }
-
-                        blob = await getBlob(pathRef);
-                        console.log("Firebase SDK tải thành công! (CORS Bypassed)");
-                    } catch (sdkErr: any) {
-                        console.error("Firebase SDK thất bại:", sdkErr);
-                        // Fallback cuối cùng: Fetch thường (Hy vọng browser cache hoặc server vui tính)
-                        try {
-                             const res = await fetch(url, { mode: 'cors' });
-                             if (!res.ok) throw new Error(res.statusText);
-                             blob = await res.blob();
-                        } catch (fetchErr) {
-                             throw new Error(`Không thể tải file từ cả SDK lẫn Fetch. Lỗi: ${sdkErr.message}`);
-                        }
+                    } else {
+                        // Nếu không tìm được path, đành dùng fetch (hên xui)
+                        const res = await fetch(url, { mode: 'cors' });
+                        if (!res.ok) throw new Error("Link file bị hỏng hoặc hết hạn");
+                        blob = await res.blob();
                     }
                 } 
-                // 3. Link ngoài (không phải firebase)
+                // 3. Link ngoài
                 else {
                     const res = await fetch(url, { mode: 'cors' });
-                    if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
                     blob = await res.blob();
                 }
 
-                if (!blob) throw new Error("Dữ liệu tải về rỗng");
+                if (!blob) throw new Error("Dữ liệu rỗng");
 
-                // --- XỬ LÝ MODEL ---
+                // --- NẠP VÀO THREE.JS ---
                 objectUrlToRevoke = URL.createObjectURL(blob);
                 const manager = new THREE.LoadingManager();
                 manager.setURLModifier((u) => {
@@ -196,7 +190,7 @@ const ManualModel = ({ item, onLoad, onError }: { item: DiscoveryItem, onLoad: (
                 );
             } catch (err: any) {
                 if (isMounted) {
-                    console.error("Lỗi tải model:", err);
+                    console.error("Lỗi Model:", err);
                     onError(err);
                 }
             }
@@ -208,7 +202,7 @@ const ManualModel = ({ item, onLoad, onError }: { item: DiscoveryItem, onLoad: (
             isMounted = false;
             if (objectUrlToRevoke) URL.revokeObjectURL(objectUrlToRevoke);
         };
-    }, [item.modelUrl, item.storagePath, item.resources]); 
+    }, [item.modelUrl, item.id]); // Xóa item.storagePath khỏi deps để tránh reload thừa
 
     // Texture Logic (Giữ nguyên)
     useEffect(() => {
@@ -256,10 +250,12 @@ const Toy3D: React.FC<Toy3DProps> = ({ item, screenshotRef, exportRef }) => {
   if (error) {
       return (
         <div className="flex flex-col items-center justify-center h-full p-6 text-center animate-fadeIn">
-            <span className="text-4xl mb-2">😵</span>
-            <span className="text-red-500 font-bold">Không tải được mô hình</span>
-            <p className="text-xs text-slate-400 mt-2 bg-slate-100 p-2 rounded max-w-[250px] break-words">{error}</p>
-            <button onClick={() => window.location.reload()} className="mt-4 px-4 py-2 bg-indigo-50 text-indigo-600 rounded-lg text-xs font-bold hover:bg-indigo-100 transition">Thử lại</button>
+            <span className="text-5xl mb-4">🔧</span>
+            <span className="text-slate-700 font-bold text-lg">Đang bảo trì mô hình này</span>
+            <p className="text-xs text-slate-400 mt-2 bg-white border border-slate-200 p-3 rounded-xl max-w-[250px] shadow-sm">{error}</p>
+            <div className="flex gap-2 mt-4">
+                <button onClick={() => window.location.reload()} className="px-4 py-2 bg-indigo-500 text-white rounded-xl text-sm font-bold shadow-lg shadow-indigo-200 active:scale-95 transition-all">Tải lại trang</button>
+            </div>
         </div>
       );
   }
@@ -268,9 +264,9 @@ const Toy3D: React.FC<Toy3DProps> = ({ item, screenshotRef, exportRef }) => {
       <div className="absolute inset-0 w-full h-full z-0 touch-none outline-none">
           {loading && (
               <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
-                  <div className="flex flex-col items-center">
-                    <div className="w-10 h-10 border-4 border-indigo-200 border-t-indigo-500 rounded-full animate-spin"></div>
-                    <span className="text-xs text-indigo-500 font-bold mt-2">Đang tải về máy...</span>
+                  <div className="bg-white/80 backdrop-blur-sm p-4 rounded-2xl flex flex-col items-center shadow-xl border border-white/50">
+                    <div className="w-8 h-8 border-4 border-indigo-200 border-t-indigo-500 rounded-full animate-spin"></div>
+                    <span className="text-xs text-indigo-600 font-bold mt-2">Đang tải dữ liệu...</span>
                   </div>
               </div>
           )}
