@@ -10,7 +10,7 @@ const COLLECTION_NAME = 'models';
 const uploadFile = async (path: string, blob: Blob): Promise<{ url: string, path: string }> => {
     if (!storage) throw new Error("Storage chưa sẵn sàng.");
     const storageRef = ref(storage, path);
-    // Lưu ý: Luôn gán type là model/gltf-binary cho chuẩn
+    // Luôn gán type là model/gltf-binary để đảm bảo tính nhất quán
     const metadata = { contentType: 'model/gltf-binary', cacheControl: 'public,max-age=31536000' };
     await uploadBytes(storageRef, blob, metadata);
     const url = await getDownloadURL(storageRef);
@@ -37,15 +37,17 @@ export const saveModelToLibrary = async (
   }
 
   try {
+    // Tạo ID mới nếu là item tạm
     const uniqueId = item.id.startsWith('temp-') ? `item-${Date.now()}` : item.id; 
+    
+    // Đặt tên file ngắn gọn, chuẩn hóa
     const folderPath = `models/${uniqueId}`;
-
-    console.log("Đang upload mô hình...");
-    // Upload file GLB duy nhất
-    const cloudFileName = `model.glb`;
+    const cloudFileName = `model.glb`; 
     const fullStoragePath = `${folderPath}/${cloudFileName}`;
     
-    // Nhận về cả URL và Path
+    console.log("Đang upload mô hình lên:", fullStoragePath);
+    
+    // Upload file GLB duy nhất
     const uploadResult = await uploadFile(fullStoragePath, modelBlob);
 
     // --- LƯU DATABASE ---
@@ -54,7 +56,7 @@ export const saveModelToLibrary = async (
       icon: item.icon,
       thumbnail: item.thumbnail || null,
       modelUrl: uploadResult.url,
-      storagePath: uploadResult.path, // QUAN TRỌNG: Lưu đường dẫn nội bộ
+      storagePath: uploadResult.path, // Path chuẩn: models/ID/model.glb
       resources: {}, 
       textures: {},
       textureFlipY: item.textureFlipY || false,

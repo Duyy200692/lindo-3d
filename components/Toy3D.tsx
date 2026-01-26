@@ -83,6 +83,21 @@ const SceneHandler = ({
     return null;
 };
 
+// Hàm trích xuất path sạch sẽ từ URL Firebase
+const extractPathFromUrl = (url: string, fallbackId: string): string | null => {
+    try {
+        if (url.includes('/o/')) {
+            const pathPart = url.split('/o/')[1].split('?')[0];
+            return decodeURIComponent(pathPart);
+        }
+    } catch(e) {}
+    // Fallback thông minh: Giả định cấu trúc chuẩn models/{id}/model.glb
+    if (fallbackId && !fallbackId.startsWith('temp')) {
+        return `models/${fallbackId}/model.glb`;
+    }
+    return null;
+}
+
 const ManualModel = ({ item, onLoad, onError }: { item: DiscoveryItem, onLoad: (scene: THREE.Group, animations: any[]) => void, onError: (err: any) => void }) => {
     const group = useRef<THREE.Group>(null);
     const [scene, setScene] = useState<THREE.Group | null>(null);
@@ -92,81 +107,83 @@ const ManualModel = ({ item, onLoad, onError }: { item: DiscoveryItem, onLoad: (
     useEffect(() => {
         if (!item.modelUrl) return;
         let isMounted = true;
-        let objectUrlToRevoke: string | null = null;
+        const cleanupUrls: string[] = [];
 
         const loadModel = async () => {
             try {
-                let blob: Blob | null = null;
-                const url = item.modelUrl!;
-                
-                // 1. Nếu là file đang chọn từ máy (blob:...) -> Tải trực tiếp
-                if (url.startsWith('blob:')) {
-                    const res = await fetch(url);
-                    blob = await res.blob();
-                } 
-                // 2. Nếu là file Cloud -> Dùng SDK GetBytes (Bỏ qua CORS, Bỏ qua 403)
-                else if (storage && url.includes('firebasestorage')) {
-                    console.log("🚀 Kích hoạt chế độ tải ưu tiên SDK...");
+                let mainUrlToLoad = item.modelUrl!;
+                const resourceMap: { [key: string]: string } = { ...item.resources };
+
+                // LOGIC THÔNG MINH: Tải từ Firebase Storage (Xử lý cả GLTF rời và GLB)
+                if (storage && item.modelUrl?.includes('firebasestorage')) {
+                    const storagePath = item.storagePath || extractPathFromUrl(item.modelUrl, item.id);
                     
-                    // Thuật toán trích xuất Path chính xác từ URL
-                    // URL mẫu: https://.../o/models%2Fitem-123%2Fmodel.glb?token=...
-                    let targetPath = item.storagePath;
-
-                    if (!targetPath) {
+                    if (storagePath) {
+                        console.log("🔍 Đang tải từ path:", storagePath);
                         try {
-                            const pathPart = url.split('/o/')[1]; // Lấy phần sau /o/
-                            if (pathPart) {
-                                const cleanPath = pathPart.split('?')[0]; // Bỏ phần ?token...
-                                targetPath = decodeURIComponent(cleanPath); // Giải mã ký tự đặc biệt (%2F -> /)
-                                console.log("🔍 Đã trích xuất path:", targetPath);
-                            }
-                        } catch (e) { console.warn("Không trích xuất được path từ URL"); }
-                    }
+                            // 1. Tải file chính (model.glb hoặc model.gltf)
+                            const mainRef = ref(storage, storagePath);
+                            const mainBuffer = await getBytes(mainRef);
+                            
+                            // Kiểm tra Magic Header để xem là Binary (GLB) hay JSON (GLTF)
+                            const headerView = new DataView(mainBuffer.slice(0, 4));
+                            const isGLB = headerView.getUint32(0, true) === 0x46546C67; // 'glTF' magic
 
-                    if (targetPath) {
-                        try {
-                            const fileRef = ref(storage, targetPath);
-                            // getBytes tải file vào bộ nhớ RAM, bỏ qua mọi rào cản trình duyệt
-                            const buffer = await getBytes(fileRef);
-                            blob = new Blob([buffer]);
-                        } catch (sdkErr: any) {
-                            console.error("SDK Error:", sdkErr);
-                            // Nếu lỗi 'not-found', có thể do path sai, thử fallback ID
-                            if (sdkErr.code === 'storage/object-not-found') {
-                                try {
-                                    console.warn("Thử đường dẫn dự phòng theo ID...");
-                                    const backupPath = `models/${item.id}/model.glb`;
-                                    const buffer = await getBytes(ref(storage, backupPath));
-                                    blob = new Blob([buffer]);
-                                } catch (backupErr) {
-                                    throw new Error("Không tìm thấy file trên máy chủ (Lỗi 404)");
-                                }
+                            if (isGLB) {
+                                // Nếu là GLB -> Ngon lành, tạo Blob luôn
+                                const blob = new Blob([mainBuffer]);
+                                mainUrlToLoad = URL.createObjectURL(blob);
+                                cleanupUrls.push(mainUrlToLoad);
                             } else {
-                                throw new Error(`Lỗi tải file bảo mật: ${sdkErr.code}`);
+                                // Nếu là GLTF (JSON) -> Phải quét tìm file .bin
+                                console.log("📂 Phát hiện file GLTF (Text), đang quét file phụ...");
+                                const textDecoder = new TextDecoder();
+                                const jsonText = textDecoder.decode(mainBuffer);
+                                const json = JSON.parse(jsonText);
+                                
+                                // Tạo blob cho file chính
+                                const mainBlob = new Blob([mainBuffer]);
+                                mainUrlToLoad = URL.createObjectURL(mainBlob);
+                                cleanupUrls.push(mainUrlToLoad);
+
+                                // Quét buffers để tìm file .bin
+                                if (json.buffers) {
+                                    const parentPath = storagePath.substring(0, storagePath.lastIndexOf('/'));
+                                    
+                                    for (const buffer of json.buffers) {
+                                        if (buffer.uri && !buffer.uri.startsWith('data:')) {
+                                            const binFileName = buffer.uri;
+                                            const binPath = `${parentPath}/${binFileName}`;
+                                            console.log("⬇️ Đang tải file phụ:", binPath);
+                                            try {
+                                                const binBuffer = await getBytes(ref(storage, binPath));
+                                                const binBlob = new Blob([binBuffer]);
+                                                const binUrl = URL.createObjectURL(binBlob);
+                                                resourceMap[binFileName] = binUrl;
+                                                cleanupUrls.push(binUrl);
+                                            } catch (binErr) {
+                                                console.warn("⚠️ Không tải được file bin:", binFileName, binErr);
+                                            }
+                                        }
+                                    }
+                                }
                             }
+                        } catch (err: any) {
+                            console.error("Lỗi SDK:", err);
+                            if (err.code === 'storage/object-not-found') throw new Error("File không tồn tại trên máy chủ.");
+                            throw err;
                         }
-                    } else {
-                        // Nếu không tìm được path, đành dùng fetch (hên xui)
-                        const res = await fetch(url, { mode: 'cors' });
-                        if (!res.ok) throw new Error("Link file bị hỏng hoặc hết hạn");
-                        blob = await res.blob();
                     }
-                } 
-                // 3. Link ngoài
-                else {
-                    const res = await fetch(url, { mode: 'cors' });
-                    blob = await res.blob();
                 }
 
-                if (!blob) throw new Error("Dữ liệu rỗng");
-
                 // --- NẠP VÀO THREE.JS ---
-                objectUrlToRevoke = URL.createObjectURL(blob);
                 const manager = new THREE.LoadingManager();
-                manager.setURLModifier((u) => {
-                    const filename = decodeURIComponent(u.replace(/^.*[\\\/]/, ''));
-                    if (item.resources && item.resources[filename]) return item.resources[filename];
-                    return u;
+                // URLModifier là chìa khóa để map tên file "scene.bin" thành blob URL thật
+                manager.setURLModifier((url) => {
+                    const filename = decodeURIComponent(url.replace(/^.*[\\\/]/, ''));
+                    // Ưu tiên map từ resourceMap (chứa các blob file bin vừa tải)
+                    if (resourceMap[filename]) return resourceMap[filename];
+                    return url;
                 });
 
                 const loader = new GLTFLoader(manager);
@@ -176,7 +193,7 @@ const ManualModel = ({ item, onLoad, onError }: { item: DiscoveryItem, onLoad: (
                 loader.setDRACOLoader(dracoLoader);
 
                 loader.load(
-                    objectUrlToRevoke,
+                    mainUrlToLoad,
                     (gltf) => {
                         if (!isMounted) return;
                         setScene(gltf.scene);
@@ -185,12 +202,15 @@ const ManualModel = ({ item, onLoad, onError }: { item: DiscoveryItem, onLoad: (
                     },
                     undefined,
                     (err) => {
-                        if (isMounted) onError(err);
+                        if (isMounted) {
+                            console.error("Loader Error:", err);
+                            onError(new Error("File mô hình bị lỗi cấu trúc"));
+                        }
                     }
                 );
             } catch (err: any) {
                 if (isMounted) {
-                    console.error("Lỗi Model:", err);
+                    console.error("Load Fatal:", err);
                     onError(err);
                 }
             }
@@ -200,9 +220,9 @@ const ManualModel = ({ item, onLoad, onError }: { item: DiscoveryItem, onLoad: (
 
         return () => { 
             isMounted = false;
-            if (objectUrlToRevoke) URL.revokeObjectURL(objectUrlToRevoke);
+            cleanupUrls.forEach(u => URL.revokeObjectURL(u));
         };
-    }, [item.modelUrl, item.id]); // Xóa item.storagePath khỏi deps để tránh reload thừa
+    }, [item.modelUrl, item.id]); 
 
     // Texture Logic (Giữ nguyên)
     useEffect(() => {
@@ -250,11 +270,11 @@ const Toy3D: React.FC<Toy3DProps> = ({ item, screenshotRef, exportRef }) => {
   if (error) {
       return (
         <div className="flex flex-col items-center justify-center h-full p-6 text-center animate-fadeIn">
-            <span className="text-5xl mb-4">🔧</span>
-            <span className="text-slate-700 font-bold text-lg">Đang bảo trì mô hình này</span>
+            <span className="text-5xl mb-4">🧩</span>
+            <span className="text-slate-700 font-bold text-lg">Mô hình bị thiếu mảnh ghép</span>
             <p className="text-xs text-slate-400 mt-2 bg-white border border-slate-200 p-3 rounded-xl max-w-[250px] shadow-sm">{error}</p>
             <div className="flex gap-2 mt-4">
-                <button onClick={() => window.location.reload()} className="px-4 py-2 bg-indigo-500 text-white rounded-xl text-sm font-bold shadow-lg shadow-indigo-200 active:scale-95 transition-all">Tải lại trang</button>
+                <button onClick={() => window.location.reload()} className="px-4 py-2 bg-indigo-500 text-white rounded-xl text-sm font-bold shadow-lg shadow-indigo-200 active:scale-95 transition-all">Tải lại</button>
             </div>
         </div>
       );
@@ -266,7 +286,7 @@ const Toy3D: React.FC<Toy3DProps> = ({ item, screenshotRef, exportRef }) => {
               <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
                   <div className="bg-white/80 backdrop-blur-sm p-4 rounded-2xl flex flex-col items-center shadow-xl border border-white/50">
                     <div className="w-8 h-8 border-4 border-indigo-200 border-t-indigo-500 rounded-full animate-spin"></div>
-                    <span className="text-xs text-indigo-600 font-bold mt-2">Đang tải dữ liệu...</span>
+                    <span className="text-xs text-indigo-600 font-bold mt-2">Đang ráp mô hình...</span>
                   </div>
               </div>
           )}
