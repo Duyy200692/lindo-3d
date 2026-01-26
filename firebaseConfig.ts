@@ -1,7 +1,7 @@
 import { initializeApp, getApp, getApps, FirebaseApp } from "firebase/app";
 import { getFirestore, Firestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from "firebase/firestore";
 import { getStorage, FirebaseStorage } from "firebase/storage";
-import { getAuth, Auth } from "firebase/auth";
+import * as FirebaseAuth from "firebase/auth";
 
 const firebaseConfig = {
   apiKey: "AIzaSyDwqbnonJu8DA7BxRnw57klhBM7iaGPdT0",
@@ -15,7 +15,7 @@ const firebaseConfig = {
 let app: FirebaseApp;
 let db: Firestore | null = null;
 let storage: FirebaseStorage | null = null;
-let auth: Auth | null = null;
+let auth: FirebaseAuth.Auth | null = null;
 
 try {
     if (!getApps().length) {
@@ -32,7 +32,7 @@ try {
     });
     
     storage = getStorage(app);
-    auth = getAuth(app);
+    auth = FirebaseAuth.getAuth(app);
     
     console.log("Firebase đã kết nối (Offline Persistence Enabled)!");
 } catch (error) {

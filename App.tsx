@@ -4,7 +4,7 @@ import Toy3D from './components/Toy3D';
 import { fetchFunFact } from './services/geminiService';
 import { saveModelToLibrary, loadLibrary, deleteFromLibrary } from './utils/storage';
 import { db, auth } from './firebaseConfig';
-import { signInAnonymously, signInWithEmailAndPassword, signOut, onAuthStateChanged, User } from 'firebase/auth';
+import * as FirebaseAuth from 'firebase/auth';
 import { Sparkles, ArrowLeft, Volume2, Rotate3d, Info, Upload, ArrowRight, Wand2, Save, Library, Trash2, Image as ImageIcon, Layers, Check, Zap, RefreshCw, Lightbulb, Wifi, WifiOff, Loader2, Eye, EyeOff, HardDrive, ShieldCheck, Lock, LogOut, X, ShieldAlert } from 'lucide-react';
 
 export default function App() {
@@ -20,7 +20,7 @@ export default function App() {
   const [loadingStatus, setLoadingStatus] = useState("Đang khởi động...");
   
   // Auth & Admin State
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<FirebaseAuth.User | null>(null);
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [adminEmail, setAdminEmail] = useState("");
   const [adminPassword, setAdminPassword] = useState("");
@@ -61,7 +61,7 @@ export default function App() {
       window.addEventListener('offline', () => setIsOnline(false));
 
       if (auth) {
-          const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+          const unsubscribe = FirebaseAuth.onAuthStateChanged(auth, async (currentUser) => {
               if (currentUser) {
                   console.log("User state:", currentUser.isAnonymous ? "Guest" : "Admin", currentUser.uid);
                   setUser(currentUser);
@@ -70,7 +70,7 @@ export default function App() {
               } else {
                   setLoadingStatus("Đang kết nối máy chủ...");
                   try {
-                    await signInAnonymously(auth);
+                    await FirebaseAuth.signInAnonymously(auth);
                   } catch (err) {
                       console.error("Lỗi đăng nhập ẩn danh:", err);
                       setIsAppReady(true);
@@ -117,7 +117,7 @@ export default function App() {
       setIsAppReady(false);
       
       try {
-          await signInWithEmailAndPassword(auth, adminEmail, adminPassword);
+          await FirebaseAuth.signInWithEmailAndPassword(auth, adminEmail, adminPassword);
           setShowLoginModal(false);
           setAdminEmail("");
           setAdminPassword("");
@@ -132,7 +132,7 @@ export default function App() {
       if (!auth) return;
       setLoadingStatus("Đang đăng xuất...");
       setIsAppReady(false); 
-      await signOut(auth); 
+      await FirebaseAuth.signOut(auth); 
   };
 
   const handleBack = () => {

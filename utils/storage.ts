@@ -6,20 +6,22 @@ import { saveToLocalDB, loadFromLocalDB, deleteFromLocalDB } from './indexedDB';
 
 const COLLECTION_NAME = 'models';
 
-const uploadFile = async (path: string, blob: Blob): Promise<string> => {
+// Trả về cả URL và Path
+const uploadFile = async (path: string, blob: Blob): Promise<{ url: string, path: string }> => {
     if (!storage) throw new Error("Storage chưa sẵn sàng.");
     const storageRef = ref(storage, path);
     // Lưu ý: Luôn gán type là model/gltf-binary cho chuẩn
     const metadata = { contentType: 'model/gltf-binary', cacheControl: 'public,max-age=31536000' };
     await uploadBytes(storageRef, blob, metadata);
-    return await getDownloadURL(storageRef);
+    const url = await getDownloadURL(storageRef);
+    return { url, path }; // Trả về full path để lưu DB
 };
 
 export const saveModelToLibrary = async (
   item: DiscoveryItem, 
   factData: FunFactData,
-  modelBlob: Blob, // Đây giờ là Blob của file .glb hoàn chỉnh
-  textureMaps?: TextureMaps, // Giữ lại để tham khảo, nhưng modelBlob đã chứa texture rồi
+  modelBlob: Blob, 
+  textureMaps?: TextureMaps, 
   resources?: { [key: string]: string }
 ): Promise<void> => {
   
@@ -41,15 +43,18 @@ export const saveModelToLibrary = async (
     console.log("Đang upload mô hình...");
     // Upload file GLB duy nhất
     const cloudFileName = `model.glb`;
-    const modelDownloadUrl = await uploadFile(`${folderPath}/${cloudFileName}`, modelBlob);
+    const fullStoragePath = `${folderPath}/${cloudFileName}`;
+    
+    // Nhận về cả URL và Path
+    const uploadResult = await uploadFile(fullStoragePath, modelBlob);
 
     // --- LƯU DATABASE ---
     await addDoc(collection(db, COLLECTION_NAME), {
       name: factData.name,
       icon: item.icon,
       thumbnail: item.thumbnail || null,
-      modelUrl: modelDownloadUrl,
-      // Resources và Textures giờ trống vì tất cả đã nằm trong file GLB
+      modelUrl: uploadResult.url,
+      storagePath: uploadResult.path, // QUAN TRỌNG: Lưu đường dẫn nội bộ
       resources: {}, 
       textures: {},
       textureFlipY: item.textureFlipY || false,
