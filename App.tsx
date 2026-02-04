@@ -185,7 +185,6 @@ export default function App() {
 
     const resources: { [key: string]: string } = {};
     fileArray.forEach(f => {
-      // Lưu ý: createObjectURL là tạm thời, browser sẽ quản lý
       resources[f.name] = URL.createObjectURL(f);
     });
 
@@ -279,7 +278,7 @@ export default function App() {
       icon: '✨',
       modelUrl: tempModelUrl,
       textures: tempTextures, 
-      resources: tempResources, // Pass danh sách resource xuống để Toy3D patch
+      resources: tempResources, 
       textureFlipY: tempFlipY, 
       color: 'bg-indigo-400',
       modelType: 'model',
@@ -310,6 +309,9 @@ export default function App() {
     if (!selectedItem || !factData || !selectedItem.modelUrl) return;
     setIsSaving(true);
     
+    // Đợi 200ms để đảm bảo render loop chạy
+    await new Promise(r => setTimeout(r, 200));
+
     // 1. Chụp ảnh Thumbnail
     let thumbnailData = undefined;
     if (screenshotRef.current) {
@@ -320,22 +322,20 @@ export default function App() {
     // 2. Tạo File GLB hoàn chỉnh
     let glbBlobToUpload: Blob | null = null;
     
-    // Nếu đang ở màn hình Viewer, hãy dùng Toy3D để export toàn bộ scene thành 1 file .glb duy nhất
-    // Đây là bước quan trọng nhất để sửa lỗi "thiếu file .bin"
+    // Nếu đang ở màn hình Viewer, export từ scene để gộp tất cả texture/bin vào 1 file GLB
     if (exportRef.current) {
-        console.log("Đang đóng gói mô hình (gộp .bin + textures)...");
         try {
+            console.log("Đang đóng gói mô hình (gộp .bin + textures)...");
             glbBlobToUpload = await exportRef.current();
         } catch (e) {
             console.error("Lỗi đóng gói scene:", e);
         }
     }
 
-    // Fallback: Nếu không export được (hiếm khi), thử tải file gốc
-    // Lưu ý: Cách này sẽ hỏng nếu file gốc là .gltf rời rạc
+    // Fallback: Nếu không export được
     if (!glbBlobToUpload) {
          try {
-             console.warn("Export thất bại, đang thử dùng file gốc (có rủi ro)...");
+             console.warn("Export thất bại, dùng file gốc...");
              const res = await fetch(selectedItem.modelUrl);
              glbBlobToUpload = await res.blob();
          } catch(e) {
@@ -358,6 +358,7 @@ export default function App() {
     }
   };
 
+  // ... (Phần còn lại giữ nguyên, chỉ hiển thị lại để đảm bảo cấu trúc)
   const handleOpenLibraryItem = (saved: { item: DiscoveryItem, factData: FunFactData }) => {
     setSelectedItem(saved.item);
     setFactData(saved.factData);
@@ -436,7 +437,6 @@ export default function App() {
       <input type="file" ref={textureInputRef} onChange={handleTextureFileChange} accept="image/png,image/jpeg,image/jpg" className="hidden" />
       <input type="file" ref={multiTextureInputRef} onChange={handleMultiTextureChange} accept="image/png,image/jpeg,image/jpg" multiple className="hidden" />
 
-      {/* ADMIN BANNER */}
       {isAdmin && (
           <div className="bg-red-500 text-white text-[10px] font-bold text-center py-1 uppercase tracking-widest flex items-center justify-center gap-2 z-50 shadow-md relative">
               <ShieldAlert className="w-3 h-3" />
@@ -444,7 +444,6 @@ export default function App() {
           </div>
       )}
 
-      {/* BACKGROUND EFFECTS */}
       <div className="absolute top-[-10%] left-[-10%] w-[60%] h-[60%] bg-blue-200 rounded-full blur-3xl opacity-30 z-0 animate-pulse pointer-events-none"></div>
       <div className="absolute bottom-[-10%] right-[-10%] w-[70%] h-[70%] bg-purple-200 rounded-full blur-3xl opacity-30 z-0 animate-pulse pointer-events-none" style={{animationDelay: '2s'}}></div>
 
@@ -457,30 +456,17 @@ export default function App() {
             <h1 className="text-2xl font-bold text-slate-700 tracking-tight">Kiddo<span className={isAdmin ? "text-red-500" : "text-indigo-500"}>{isAdmin ? "Admin" : "Builder"}</span></h1>
             </div>
             <div className="flex items-center gap-2">
-                {/* NÚT LOGIN ADMIN */}
                 {isAdmin ? (
-                    <button 
-                        onClick={handleLogout}
-                        className="p-2 rounded-full border border-red-200 bg-white text-red-500 hover:bg-red-50 active:scale-95 transition-all shadow-sm"
-                        title="Đăng xuất Admin"
-                    >
+                    <button onClick={handleLogout} className="p-2 rounded-full border border-red-200 bg-white text-red-500 hover:bg-red-50 active:scale-95 transition-all shadow-sm" title="Đăng xuất Admin">
                         <LogOut className="w-4 h-4" />
                     </button>
                 ) : (
-                    <button 
-                        onClick={() => setShowLoginModal(true)}
-                        className="p-2 rounded-full border border-slate-100 bg-white/60 text-slate-400 hover:text-indigo-500 hover:bg-white active:scale-95 transition-all"
-                        title="Đăng nhập Admin"
-                    >
+                    <button onClick={() => setShowLoginModal(true)} className="p-2 rounded-full border border-slate-100 bg-white/60 text-slate-400 hover:text-indigo-500 hover:bg-white active:scale-95 transition-all" title="Đăng nhập Admin">
                         <Lock className="w-4 h-4" />
                     </button>
                 )}
 
-                <button 
-                  onClick={() => loadSavedLibrary()} 
-                  className={`p-2 rounded-full border border-slate-100 bg-white/60 text-slate-500 hover:text-indigo-500 hover:bg-white active:scale-95 transition-all ${isRefreshing ? 'animate-spin' : ''}`}
-                  title="Tải lại danh sách"
-                >
+                <button onClick={() => loadSavedLibrary()} className={`p-2 rounded-full border border-slate-100 bg-white/60 text-slate-500 hover:text-indigo-500 hover:bg-white active:scale-95 transition-all ${isRefreshing ? 'animate-spin' : ''}`} title="Tải lại danh sách">
                   <RefreshCw className="w-4 h-4" />
                 </button>
                 <div className="flex items-center gap-2 bg-white/60 px-3 py-1.5 rounded-full backdrop-blur-sm border border-slate-100 shadow-sm">
@@ -545,7 +531,7 @@ export default function App() {
                                 src={record.item.thumbnail} 
                                 alt={record.item.name} 
                                 className="w-full h-full object-cover" 
-                                crossOrigin="anonymous" // QUAN TRỌNG: Giúp load ảnh từ Cloud
+                                crossOrigin="anonymous"
                             />
                         ) : (
                             <span className="text-2xl">{record.item.icon}</span>
@@ -561,7 +547,6 @@ export default function App() {
                             )}
                          </p>
                       </div>
-                      {/* CHỈ ADMIN HOẶC FILE LOCAL MỚI ĐƯỢC XÓA */}
                       {(isAdmin || record.item.id.startsWith('temp')) && (
                           <button onClick={(e) => handleDeleteItem(e, record.item.id)} className="p-2 bg-red-50 text-red-500 rounded-full hover:bg-red-100 transition-colors z-10">
                             <Trash2 className="w-4 h-4" />
@@ -575,7 +560,6 @@ export default function App() {
           </div>
         )}
 
-        {/* LOGIN MODAL */}
         {showLoginModal && (
             <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fadeIn">
                 <div className="bg-white rounded-3xl shadow-2xl p-6 w-full max-w-sm relative">
@@ -605,7 +589,6 @@ export default function App() {
             </div>
         )}
 
-        {/* ... (Các phần UI khác giữ nguyên) ... */}
         {showNameInput && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fadeIn">
             <div className="bg-white rounded-3xl shadow-2xl p-6 w-full max-w-md relative overflow-hidden flex flex-col max-h-[90vh]">
@@ -653,26 +636,20 @@ export default function App() {
 
         {mode === AppMode.VIEWER && selectedItem && (
           <div className="relative w-full h-full overflow-hidden">
-            {/* 3D VIEWPORT - Nằm làm nền */}
             <div className="absolute inset-0 z-0 bg-slate-100">
                <Toy3D item={selectedItem} screenshotRef={screenshotRef} exportRef={exportRef} />
             </div>
 
-            {/* CONTROL BUTTONS - Luôn nổi phía trên */}
             <div className="absolute top-4 left-4 right-4 z-50 flex items-center justify-between">
                <button onClick={handleBack} className="p-3 bg-white/80 backdrop-blur-md rounded-2xl shadow-lg border border-white/50 text-slate-700 hover:bg-white transition-transform active:scale-95">
                  <ArrowLeft className="w-6 h-6" />
                </button>
                
                <div className="flex gap-3">
-                 <button 
-                    onClick={() => setShowInfo(!showInfo)} 
-                    className="p-3 bg-white/80 backdrop-blur-md rounded-2xl shadow-lg border border-white/50 text-indigo-600 hover:bg-white transition-transform active:scale-95"
-                 >
+                 <button onClick={() => setShowInfo(!showInfo)} className="p-3 bg-white/80 backdrop-blur-md rounded-2xl shadow-lg border border-white/50 text-indigo-600 hover:bg-white transition-transform active:scale-95">
                    {showInfo ? <EyeOff className="w-6 h-6" /> : <Eye className="w-6 h-6" />}
                  </button>
 
-                 {/* Chỉ cho phép lưu nếu không phải file cloud hoặc muốn lưu lại bản khác */}
                  <button onClick={handleSaveToLibrary} disabled={isSaving} className="px-4 py-2 bg-white/80 backdrop-blur-md rounded-2xl shadow-lg border border-white/50 text-indigo-600 font-bold flex items-center gap-2 active:scale-95 transition-all">
                     {isSaving ? <Loader2 className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />}
                     <span className="hidden sm:inline">{isSaving ? "Đang lưu..." : "Lưu lại"}</span>
@@ -680,7 +657,6 @@ export default function App() {
                </div>
             </div>
 
-            {/* INFO PANEL - Có thể ẩn hiện */}
             {showInfo && (
                 <div className="absolute bottom-6 left-4 right-4 z-20 animate-slideUp">
                     <div className="bg-white/90 backdrop-blur-xl rounded-[32px] shadow-2xl p-6 border border-white/50 max-w-lg mx-auto">
